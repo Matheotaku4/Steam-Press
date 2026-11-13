@@ -411,6 +411,8 @@ impl SteamPressApp {
                 if matches!(stage, Stage::Preflight | Stage::Download) {
                     self.game_queue
                         .set_status(|entry| entry.encode() == job, EntryStatus::Running);
+                    self.workshop_queue
+                        .set_status(|entry| workshop_stem(entry) == job, EntryStatus::Running);
                 }
                 self.push_log(format!("[{}] {message}", stage.label()));
             }
