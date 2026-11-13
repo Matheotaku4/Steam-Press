@@ -35,10 +35,10 @@ pub fn dispatch(cli: Cli) -> Result<ExitCode, String> {
 
 fn doctor(cli: &Cli) -> Result<ExitCode, String> {
     let (paths, settings) = support::load_settings(cli)?;
-    println!("Configuration : {}", paths.config_dir.display());
-    println!("Travail       : {}", paths.work_dir.display());
-    println!("Sortie        : {}", settings.output_dir(&paths).display());
-    println!("Compresseur   : {}", settings.compressor.label());
+    println!("Config  : {}", paths.config_dir.display());
+    println!("Work    : {}", paths.work_dir.display());
+    println!("Output  : {}", settings.output_dir(&paths).display());
+    println!("Archiver: {}", settings.compressor.label());
 
     let steamcmd = downloader::steamcmd::SteamCmd::from_settings(&settings).check();
     let depotdownloader =
@@ -46,26 +46,26 @@ fn doctor(cli: &Cli) -> Result<ExitCode, String> {
     for (label, status) in [("SteamCMD", steamcmd), ("DepotDownloader", depotdownloader)] {
         match status.path {
             Some(path) => println!("{label:<14}: {}", path.display()),
-            None => println!("{label:<14}: absent"),
+            None => println!("{label:<14}: not found"),
         }
     }
 
     for compressor in [Compressor::SevenZip, Compressor::Rar] {
         match archive::compressor_binary(compressor, &settings) {
             Ok(path) => println!("{:<14}: {}", compressor.label(), path.display()),
-            Err(_) => println!("{:<14}: absent", compressor.label()),
+            Err(_) => println!("{:<14}: not found", compressor.label()),
         }
     }
 
     let names = support::depot_names(&paths);
-    println!("Dépôts connus : {}", names.len());
+    println!("Known depots: {}", names.len());
 
     let output = settings.output_dir(&paths);
-    std::fs::create_dir_all(&output).map_err(|error| format!("sortie : {error}"))?;
+    std::fs::create_dir_all(&output).map_err(|error| format!("output: {error}"))?;
     let probe = output.join(".steam-press-write-test");
-    std::fs::write(&probe, b"ok").map_err(|error| format!("sortie non inscriptible : {error}"))?;
+    std::fs::write(&probe, b"ok").map_err(|error| format!("output is not writable: {error}"))?;
     let _ = std::fs::remove_file(&probe);
-    println!("Sortie        : inscriptible");
+    println!("Output  : writable");
 
     Ok(ExitCode::SUCCESS)
 }
@@ -77,31 +77,31 @@ fn login(cli: &Cli, args: &LoginArgs) -> Result<ExitCode, String> {
 
     let username = match &args.username {
         Some(username) => username.clone(),
-        None => support::prompt("Nom d'utilisateur Steam (ou « anonymous ») : ")?,
+        None => support::prompt("Steam username (or \"anonymous\"): ")?,
     };
     if username.is_empty() {
-        return Err("nom d'utilisateur vide".to_string());
+        return Err("empty username".to_string());
     }
 
     let store = CredentialStore::new(&paths);
     if username.eq_ignore_ascii_case("anonymous") {
         store.clear().map_err(|error| error.to_string())?;
-        println!("Mode anonyme : aucun identifiant conservé.");
+        println!("Anonymous mode: no credentials stored.");
         return Ok(ExitCode::SUCCESS);
     }
 
     let password = if args.password_stdin {
         support::prompt("")?
     } else {
-        rpassword::prompt_password("Mot de passe Steam : ")
-            .map_err(|error| format!("lecture du mot de passe : {error}"))?
+        rpassword::prompt_password("Steam password: ")
+            .map_err(|error| format!("reading the password: {error}"))?
     };
     if password.is_empty() {
-        return Err("mot de passe vide".to_string());
+        return Err("empty password".to_string());
     }
 
     support::save_credentials(&paths, &settings, &username, Some(&password))?;
-    println!("Identifiants enregistrés pour {username}.");
+    println!("Credentials saved for {username}.");
     Ok(ExitCode::SUCCESS)
 }
 
@@ -110,14 +110,14 @@ fn info(cli: &Cli, args: &InfoArgs) -> Result<ExitCode, String> {
     let app = steam::fetch_app_info(&args.appid, &args.branch)?;
     println!("{} ({})", app.name, app.appid);
     println!(
-        "Build : {} — {}",
+        "Build   : {} - {}",
         app.build_id,
         app.build_time
             .map(template::format_utc_datetime)
-            .unwrap_or_else(|| "date inconnue".to_string())
+            .unwrap_or_else(|| "unknown date".to_string())
     );
     if let Some(install_dir) = &app.install_dir {
-        println!("Répertoire : {install_dir}");
+        println!("Directory: {install_dir}");
     }
     for depot in &app.depots {
         println!(
@@ -158,7 +158,7 @@ fn queue(cli: &Cli, action: &QueueAction) -> Result<ExitCode, String> {
             let path = game_queue_file(cli, file);
             let load = load_game_queue(&path)?;
             if load.jobs.is_empty() {
-                println!("File vide ({})", path.display());
+                println!("Queue is empty ({})", path.display());
             }
             for (index, job) in load.jobs.iter().enumerate() {
                 println!(
@@ -170,12 +170,12 @@ fn queue(cli: &Cli, action: &QueueAction) -> Result<ExitCode, String> {
                     if job.branch_password.is_empty() {
                         String::new()
                     } else {
-                        " (protégée)".to_string()
+                        " (protected)".to_string()
                     }
                 );
             }
             for warning in load.warnings {
-                eprintln!("avertissement : {warning}");
+                eprintln!("warning: {warning}");
             }
         }
         QueueAction::Add {
@@ -191,37 +191,37 @@ fn queue(cli: &Cli, action: &QueueAction) -> Result<ExitCode, String> {
                 .with_branch(branch.clone(), branch_password.clone().unwrap_or_default());
             job.validate()?;
             if load.jobs.contains(&job) {
-                return Err("ce job est déjà dans la file".to_string());
+                return Err("this job is already queued".to_string());
             }
             load.jobs.push(job);
             save_game_queue(&path, &load.jobs)?;
-            println!("Job ajouté ({}).", path.display());
+            println!("Job added ({}).", path.display());
         }
         QueueAction::Remove { index, file } => {
             let path = game_queue_file(cli, file);
             let mut load = load_game_queue(&path)?;
             if *index == 0 || *index > load.jobs.len() {
-                return Err(format!("index invalide : {index}"));
+                return Err(format!("invalid index: {index}"));
             }
             load.jobs.remove(index - 1);
             save_game_queue(&path, &load.jobs)?;
-            println!("Job retiré.");
+            println!("Job removed.");
         }
         QueueAction::Move { from, to, file } => {
             let path = game_queue_file(cli, file);
             let mut load = load_game_queue(&path)?;
             if *from == 0 || *from > load.jobs.len() || *to == 0 || *to > load.jobs.len() {
-                return Err("index invalide".to_string());
+                return Err("invalid index".to_string());
             }
             let job = load.jobs.remove(from - 1);
             load.jobs.insert(to - 1, job);
             save_game_queue(&path, &load.jobs)?;
-            println!("File réordonnée.");
+            println!("Queue reordered.");
         }
         QueueAction::Clear { file } => {
             let path = game_queue_file(cli, file);
             save_game_queue(&path, &[])?;
-            println!("File vidée.");
+            println!("Queue cleared.");
         }
         QueueAction::Import { source, file } => {
             let path = game_queue_file(cli, file);
@@ -235,16 +235,16 @@ fn queue(cli: &Cli, action: &QueueAction) -> Result<ExitCode, String> {
                 }
             }
             save_game_queue(&path, &load.jobs)?;
-            println!("{added} job(s) importé(s).");
+            println!("{added} job(s) imported.");
             for warning in incoming.warnings {
-                eprintln!("avertissement : {warning}");
+                eprintln!("warning: {warning}");
             }
         }
         QueueAction::Export { destination, file } => {
             let path = game_queue_file(cli, file);
             let load = load_game_queue(&path)?;
             save_game_queue(destination, &load.jobs)?;
-            println!("File exportée vers {}.", destination.display());
+            println!("Queue exported to {}.", destination.display());
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -262,7 +262,7 @@ fn resolve_compressor(
         Some("none") => Ok((Compressor::SevenZip, true)),
         Some(value) => Compressor::from_setting(value)
             .map(|compressor| (compressor, false))
-            .ok_or_else(|| format!("compresseur inconnu : {value} (7z, rar ou none)")),
+            .ok_or_else(|| format!("unknown compressor: {value} (7z, rar or none)")),
     }
 }
 
@@ -290,7 +290,7 @@ fn pack(cli: &Cli, args: &PackArgs) -> Result<ExitCode, String> {
         );
     }
     if jobs.is_empty() {
-        return Err("aucun job : fournissez --appid ou --queue".to_string());
+        return Err("no jobs: provide --appid or --queue".to_string());
     }
 
     let options = PackOptions {
@@ -321,11 +321,11 @@ fn pack(cli: &Cli, args: &PackArgs) -> Result<ExitCode, String> {
             }
             PackStatus::Failed(message) => {
                 failed += 1;
-                eprintln!("{} — échec : {message}", outcome.stem);
+                eprintln!("{} - failed: {message}", outcome.stem);
             }
             PackStatus::Cancelled => {
                 failed += 1;
-                eprintln!("{} — annulé", outcome.stem);
+                eprintln!("{} - cancelled", outcome.stem);
             }
         }
     }
@@ -349,23 +349,23 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
             let job = WorkshopJob::new(appid.clone(), workshop_id.clone());
             job.validate()?;
             if load.jobs.contains(&job) {
-                return Err("cet item est déjà dans la file".to_string());
+                return Err("this item is already queued".to_string());
             }
             load.jobs.push(job);
             save_workshop_queue(&path, &load.jobs)?;
-            println!("Item ajouté ({}).", path.display());
+            println!("Item added ({}).", path.display());
         }
         WorkshopAction::List { file } => {
             let path = workshop_queue_file(cli, file);
             let load = load_workshop_queue(&path)?;
             if load.jobs.is_empty() {
-                println!("File vide ({})", path.display());
+                println!("Queue is empty ({})", path.display());
             }
             for (index, job) in load.jobs.iter().enumerate() {
                 println!("{:>3}. {:>8} / {}", index + 1, job.appid, job.workshop_id);
             }
             for warning in load.warnings {
-                eprintln!("avertissement : {warning}");
+                eprintln!("warning: {warning}");
             }
         }
         WorkshopAction::Import { source, file } => {
@@ -380,13 +380,13 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
                 }
             }
             save_workshop_queue(&path, &load.jobs)?;
-            println!("{added} item(s) importé(s).");
+            println!("{added} item(s) imported.");
         }
         WorkshopAction::Export { destination, file } => {
             let path = workshop_queue_file(cli, file);
             let load = load_workshop_queue(&path)?;
             save_workshop_queue(destination, &load.jobs)?;
-            println!("File exportée vers {}.", destination.display());
+            println!("Queue exported to {}.", destination.display());
         }
         WorkshopAction::Run {
             queue_files,
@@ -408,7 +408,7 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
                 jobs.extend(load_workshop_queue(file)?.jobs);
             }
             if jobs.is_empty() {
-                return Err("aucun item : fournissez --queue".to_string());
+                return Err("no items: provide --queue".to_string());
             }
 
             let options = PackOptions {
@@ -450,7 +450,7 @@ fn depots(cli: &Cli, action: &DepotsAction) -> Result<ExitCode, String> {
             names
                 .save(paths.depots_file())
                 .map_err(|error| error.to_string())?;
-            println!("{} dépôts synchronisés.", names.len());
+            println!("{} depot names synchronized.", names.len());
         }
         DepotsAction::Lookup { depot_id } => {
             let (paths, _) = support::load_settings(cli)?;
@@ -458,7 +458,7 @@ fn depots(cli: &Cli, action: &DepotsAction) -> Result<ExitCode, String> {
             match names.get(depot_id) {
                 Some(name) => println!("{depot_id} = {name}"),
                 None => {
-                    eprintln!("dépôt {depot_id} inconnu");
+                    eprintln!("unknown depot {depot_id}");
                     return Ok(ExitCode::from(1));
                 }
             }
@@ -481,7 +481,7 @@ fn depots(cli: &Cli, action: &DepotsAction) -> Result<ExitCode, String> {
                     shown += 1;
                 }
             }
-            println!("{shown} dépôt(s).");
+            println!("{shown} depot(s).");
         }
     }
     Ok(ExitCode::SUCCESS)

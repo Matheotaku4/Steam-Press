@@ -33,7 +33,7 @@ impl SteamCmd {
         tooling::find_executable(self.binary.as_deref(), &["steamcmd.sh", "steamcmd"]).ok_or_else(
             || DownloadError::MissingTool {
                 tool: "SteamCMD".to_string(),
-                expected: "steamcmd.sh/steamcmd dans le PATH ou « steamcmdpath » dans les réglages"
+                expected: "steamcmd.sh/steamcmd in PATH or `steamcmdpath` in the settings"
                     .to_string(),
             },
         )
@@ -62,12 +62,12 @@ impl Downloader for SteamCmd {
             Some(path) => ToolStatus {
                 available: true,
                 path: Some(path),
-                detail: "SteamCMD détecté".to_string(),
+                detail: "SteamCMD found".to_string(),
             },
             None => ToolStatus {
                 available: false,
                 path: None,
-                detail: "SteamCMD introuvable".to_string(),
+                detail: "SteamCMD not found".to_string(),
             },
         }
     }
@@ -79,7 +79,7 @@ impl Downloader for SteamCmd {
     ) -> Result<DownloadReport, DownloadError> {
         let binary = self.locate()?;
         fs::create_dir_all(&request.work_dir)
-            .map_err(|error| DownloadError::Failed(format!("dossier de travail : {error}")))?;
+            .map_err(|error| DownloadError::Failed(format!("work directory: {error}")))?;
 
         let script_path = request
             .work_dir
@@ -134,7 +134,7 @@ impl Downloader for SteamCmd {
     ) -> Result<WorkshopReport, DownloadError> {
         let binary = self.locate()?;
         fs::create_dir_all(&request.work_dir)
-            .map_err(|error| DownloadError::Failed(format!("dossier de travail : {error}")))?;
+            .map_err(|error| DownloadError::Failed(format!("work directory: {error}")))?;
 
         let script_path = request
             .work_dir

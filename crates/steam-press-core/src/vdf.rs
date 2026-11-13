@@ -184,14 +184,14 @@ impl<'a> Parser<'a> {
             let mut output = Vec::new();
             loop {
                 let Some(byte) = self.peek() else {
-                    return Err("chaîne VDF non terminée".to_string());
+                    return Err("unterminated VDF string".to_string());
                 };
                 self.position += 1;
                 match byte {
                     b'"' => break,
                     b'\\' => {
                         let Some(escaped) = self.peek() else {
-                            return Err("échappement VDF incomplet".to_string());
+                            return Err("incomplete VDF escape".to_string());
                         };
                         output.push(escaped);
                         self.position += 1;
@@ -199,7 +199,7 @@ impl<'a> Parser<'a> {
                     _ => output.push(byte),
                 }
             }
-            String::from_utf8(output).map_err(|_| "chaîne VDF non UTF-8".to_string())
+            String::from_utf8(output).map_err(|_| "VDF string is not UTF-8".to_string())
         } else {
             let start = self.position;
             while let Some(byte) = self.peek() {
@@ -209,7 +209,7 @@ impl<'a> Parser<'a> {
                 self.position += 1;
             }
             if start == self.position {
-                return Err(format!("jeton VDF attendu à l'octet {}", self.position));
+                return Err(format!("expected a VDF token at byte {}", self.position));
             }
             Ok(String::from_utf8_lossy(&self.bytes[start..self.position]).into_owned())
         }
@@ -224,7 +224,7 @@ impl<'a> Parser<'a> {
                     self.position += 1;
                     return Ok(Value::Object(entries));
                 }
-                None => return Err("objet VDF non terminé".to_string()),
+                None => return Err("unterminated VDF object".to_string()),
                 _ => {}
             }
             let key = self.parse_token()?;
@@ -251,7 +251,7 @@ pub fn parse(input: &str) -> Result<Value, String> {
         }
         if parser.peek() == Some(b'}') {
             return Err(format!(
-                "accolade fermante inattendue à l'octet {}",
+                "unexpected closing brace at byte {}",
                 parser.position
             ));
         }

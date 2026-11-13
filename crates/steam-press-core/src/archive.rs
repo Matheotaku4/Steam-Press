@@ -65,7 +65,7 @@ pub fn compressor_binary(compressor: Compressor, settings: &Settings) -> Result<
     };
     tooling::find_executable(explicit, compressor.binary_names()).ok_or_else(|| {
         format!(
-            "{} introuvable : installez {} ou renseignez son chemin dans les réglages",
+            "{} not found: install {} or set its path in the settings",
             compressor.label(),
             compressor.binary_names().join(" / ")
         )

@@ -37,7 +37,7 @@ impl GameJob {
     pub fn validate(&self) -> Result<(), String> {
         match self.appid.trim().parse::<u64>() {
             Ok(value) if value > 0 => Ok(()),
-            _ => Err(format!("AppID invalide : {}", self.appid)),
+            _ => Err(format!("Invalid AppID: {}", self.appid)),
         }
     }
 
@@ -54,10 +54,10 @@ impl GameJob {
     pub fn decode(line: &str) -> Result<Self, String> {
         let parts: Vec<&str> = line.trim().split('|').collect();
         if parts.len() < 2 {
-            return Err(format!("ligne de file invalide : {line}"));
+            return Err(format!("invalid queue line: {line}"));
         }
         let platform = Platform::from_key(parts[0])
-            .ok_or_else(|| format!("plateforme inconnue : {}", parts[0]))?;
+            .ok_or_else(|| format!("unknown platform: {}", parts[0]))?;
         let branch = parts
             .get(2)
             .map(|value| value.trim())
@@ -107,10 +107,10 @@ impl WorkshopJob {
             .map(|value| value > 0)
             .unwrap_or(false);
         if !appid_ok {
-            return Err(format!("AppID invalide : {}", self.appid));
+            return Err(format!("Invalid AppID: {}", self.appid));
         }
         if !workshop_ok {
-            return Err(format!("Workshop ID invalide : {}", self.workshop_id));
+            return Err(format!("Invalid Workshop ID: {}", self.workshop_id));
         }
         Ok(())
     }
@@ -124,13 +124,13 @@ impl WorkshopJob {
         let job = if let Some(rest) = line.strip_prefix("workshop_download_item") {
             let parts: Vec<&str> = rest.split_whitespace().collect();
             if parts.len() < 2 {
-                return Err(format!("ligne Workshop invalide : {line}"));
+                return Err(format!("invalid Workshop line: {line}"));
             }
             Self::new(parts[0], parts[1])
         } else {
             let parts: Vec<&str> = line.split('|').collect();
             if parts.len() < 2 {
-                return Err(format!("ligne Workshop invalide : {line}"));
+                return Err(format!("invalid Workshop line: {line}"));
             }
             Self::new(parts[0], parts[1])
         };
@@ -167,7 +167,7 @@ pub fn parse_game_queue(content: &str) -> QueueLoad<GameJob> {
                     load.jobs.push(job);
                 }
             }
-            Err(error) => load.warnings.push(format!("ligne {} : {error}", index + 1)),
+            Err(error) => load.warnings.push(format!("line {}: {error}", index + 1)),
         }
     }
     load
@@ -186,7 +186,7 @@ pub fn parse_workshop_queue(content: &str) -> QueueLoad<WorkshopJob> {
                     load.jobs.push(job);
                 }
             }
-            Err(error) => load.warnings.push(format!("ligne {} : {error}", index + 1)),
+            Err(error) => load.warnings.push(format!("line {}: {error}", index + 1)),
         }
     }
     load

@@ -3,7 +3,7 @@ use steam_press_core::config::{Paths, Settings};
 use steam_press_core::credentials::{CredentialStore, SavedCredentials};
 use steam_press_core::depots::DepotNames;
 use steam_press_core::downloader::Credentials;
-use steam_press_core::events::{EventSink, PackEvent};
+use steam_press_core::events::{EventSink, FinishStatus, PackEvent};
 
 pub fn paths(cli: &Cli) -> Paths {
     let mut paths = Paths::discover();
@@ -23,7 +23,7 @@ pub fn load_settings(cli: &Cli) -> Result<(Paths, Settings), String> {
     let paths = paths(cli);
     paths
         .ensure()
-        .map_err(|error| format!("répertoires : {error}"))?;
+        .map_err(|error| format!("directories: {error}"))?;
     let mut settings = Settings::load(&paths);
     if let Some(output) = &cli.output {
         settings.output_dir = Some(output.clone());
@@ -60,10 +60,7 @@ pub fn credentials(
             username: saved.username,
             password: saved.password,
         }),
-        None => Err(
-            "aucun identifiant enregistré : lancez « steam-press login » ou utilisez --anonymous"
-                .to_string(),
-        ),
+        None => Err("no saved credentials: run `steam-press login` or use --anonymous".to_string()),
     }
 }
 
@@ -87,7 +84,15 @@ pub fn event_sink(verbose: bool) -> EventSink {
                 eprintln!("  {line}");
             }
         }
-        PackEvent::Finished { outcome, .. } => eprintln!("{outcome}"),
+        PackEvent::Finished {
+            status, outcome, ..
+        } => {
+            if status == FinishStatus::Failed {
+                eprintln!("Failed: {outcome}");
+            } else if verbose {
+                eprintln!("{}: {outcome}", status.label());
+            }
+        }
     })
 }
 

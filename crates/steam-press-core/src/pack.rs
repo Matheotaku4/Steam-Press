@@ -7,7 +7,7 @@ use crate::depots::DepotNames;
 use crate::downloader::{
     self, process, Credentials, DepotSelector, DownloadError, DownloadRequest, DownloaderKind,
 };
-use crate::events::{CancellationToken, EventSink, PackEvent, Stage};
+use crate::events::{CancellationToken, EventSink, FinishStatus, PackEvent, Stage};
 use crate::naming;
 use crate::queue::GameJob;
 use crate::steam::{self, DepotEntry, StoreInfo};
@@ -48,11 +48,11 @@ pub enum PipelineError {
 impl fmt::Display for PipelineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Steam(message) => write!(formatter, "Steam : {message}"),
-            Self::Download(message) => write!(formatter, "téléchargement : {message}"),
-            Self::Io(message) => write!(formatter, "fichiers : {message}"),
-            Self::Archive(message) => write!(formatter, "compression : {message}"),
-            Self::Template(message) => write!(formatter, "informations : {message}"),
+            Self::Steam(message) => write!(formatter, "Steam: {message}"),
+            Self::Download(message) => write!(formatter, "download: {message}"),
+            Self::Io(message) => write!(formatter, "files: {message}"),
+            Self::Archive(message) => write!(formatter, "archive: {message}"),
+            Self::Template(message) => write!(formatter, "release info: {message}"),
             Self::Invalid(message) => formatter.write_str(message),
         }
     }
@@ -189,7 +189,7 @@ impl Packer {
         sink.emit(PackEvent::Stage {
             job: label.clone(),
             stage: Stage::Preflight,
-            message: "Récupération des métadonnées Steam".to_string(),
+            message: "Fetching Steam metadata".to_string(),
         });
 
         let preflight = match (self.preflight)(job) {
@@ -211,7 +211,7 @@ impl Packer {
                 &stem,
                 started,
                 &sink,
-                format!("dossier de sortie : {error}"),
+                format!("output directory: {error}"),
             );
         }
 
@@ -220,7 +220,8 @@ impl Packer {
                 archive::archive_path(&output_dir, &stem, self.options.settings.compressor);
             sink.emit(PackEvent::Finished {
                 job: label,
-                outcome: "Ignoré (archive existante)".to_string(),
+                status: FinishStatus::Skipped,
+                outcome: "Archive already exists".to_string(),
                 output: Some(output.clone()),
             });
             return PackOutcome {
@@ -251,17 +252,13 @@ impl Packer {
         }
 
         if self.cancel.is_cancelled() {
-            return cancelled_outcome(stem, started, preflight);
+            return self.cancelled(job, stem, started, preflight, &sink);
         }
 
         sink.emit(PackEvent::Stage {
             job: label.clone(),
             stage: Stage::Download,
-            message: format!(
-                "Téléchargement de {} ({})",
-                preflight.name,
-                job.platform.label()
-            ),
+            message: format!("Downloading {} ({})", preflight.name, job.platform.label()),
         });
 
         let work_dir = self.options.paths.work_dir.join(&stem);
@@ -272,7 +269,7 @@ impl Packer {
                     &stem,
                     started,
                     &sink,
-                    format!("dossier de travail : {error}"),
+                    format!("work directory: {error}"),
                 );
             }
         }
@@ -282,7 +279,7 @@ impl Packer {
                 &stem,
                 started,
                 &sink,
-                format!("dossier de travail : {error}"),
+                format!("work directory: {error}"),
             );
         }
 
@@ -317,7 +314,7 @@ impl Packer {
         let report = match downloader.download(&request, &sink) {
             Ok(report) => report,
             Err(DownloadError::Cancelled) => {
-                return cancelled_outcome(stem, started, preflight);
+                return self.cancelled(job, stem, started, preflight, &sink);
             }
             Err(error) => return self.failed(job, &stem, started, &sink, error.to_string()),
         };
@@ -325,30 +322,30 @@ impl Packer {
         sink.emit(PackEvent::Stage {
             job: label.clone(),
             stage: Stage::Normalize,
-            message: "Nettoyage de la sortie SteamCMD".to_string(),
+            message: "Cleaning the downloaded output".to_string(),
         });
 
         let temp = work_dir.join("temp");
         if let Err(error) = normalize_content(&report.content_dir, &work_dir, &temp) {
-            return self.failed(job, &stem, started, &sink, format!("nettoyage : {error}"));
+            return self.failed(job, &stem, started, &sink, format!("cleanup: {error}"));
         }
 
         sink.emit(PackEvent::Stage {
             job: label.clone(),
             stage: Stage::Manifest,
-            message: "Préparation des manifestes".to_string(),
+            message: "Preparing manifests".to_string(),
         });
 
         let steamapps = temp.join("steamapps");
         let acf_path = steamapps.join(format!("appmanifest_{}.acf", job.appid));
         let manifest = if acf_path.is_file() {
             if let Err(error) = acf::rewrite_privacy_fields(&acf_path) {
-                return self.failed(job, &stem, started, &sink, format!("manifeste : {error}"));
+                return self.failed(job, &stem, started, &sink, format!("manifest: {error}"));
             }
             match acf::read_manifest(&acf_path) {
                 Ok(manifest) => Some(manifest),
                 Err(error) => {
-                    return self.failed(job, &stem, started, &sink, format!("manifeste : {error}"))
+                    return self.failed(job, &stem, started, &sink, format!("manifest: {error}"))
                 }
             }
         } else {
@@ -374,7 +371,7 @@ impl Packer {
                 install_scripts: Vec::new(),
             };
             if let Err(error) = acf::write_acf(&steamapps, &acf_job) {
-                return self.failed(job, &stem, started, &sink, format!("manifeste : {error}"));
+                return self.failed(job, &stem, started, &sink, format!("manifest: {error}"));
             }
             acf::read_manifest(&acf_path).ok()
         };
@@ -438,7 +435,7 @@ impl Packer {
         sink.emit(PackEvent::Stage {
             job: label.clone(),
             stage: Stage::Archive,
-            message: "Compression de la sortie".to_string(),
+            message: "Creating the archive".to_string(),
         });
 
         let output = match compress_directory(
@@ -451,7 +448,7 @@ impl Packer {
         ) {
             Ok(CompressOutcome::Done(path)) => path,
             Ok(CompressOutcome::Cancelled) => {
-                return cancelled_outcome(stem, started, preflight);
+                return self.cancelled(job, stem, started, preflight, &sink);
             }
             Err(error) => return self.failed(job, &stem, started, &sink, error.to_string()),
         };
@@ -459,7 +456,7 @@ impl Packer {
         sink.emit(PackEvent::Stage {
             job: label.clone(),
             stage: Stage::Template,
-            message: "Rédaction des informations de publication".to_string(),
+            message: "Rendering release information".to_string(),
         });
 
         let custom_template = self
@@ -508,7 +505,8 @@ impl Packer {
 
         sink.emit(PackEvent::Finished {
             job: label,
-            outcome: "Terminé".to_string(),
+            status: FinishStatus::Completed,
+            outcome: "Completed".to_string(),
             output: Some(output.clone()),
         });
 
@@ -524,6 +522,23 @@ impl Packer {
         }
     }
 
+    fn cancelled(
+        &self,
+        job: &GameJob,
+        stem: String,
+        started: Instant,
+        preflight: Preflight,
+        sink: &EventSink,
+    ) -> PackOutcome {
+        sink.emit(PackEvent::Finished {
+            job: job.encode(),
+            status: FinishStatus::Cancelled,
+            outcome: "Cancelled".to_string(),
+            output: None,
+        });
+        cancelled_outcome(stem, started, preflight)
+    }
+
     fn failed(
         &self,
         job: &GameJob,
@@ -534,7 +549,8 @@ impl Packer {
     ) -> PackOutcome {
         sink.emit(PackEvent::Finished {
             job: job.encode(),
-            outcome: format!("Échec : {message}"),
+            status: FinishStatus::Failed,
+            outcome: message.clone(),
             output: None,
         });
         failed_outcome(stem.to_string(), started, PackStatus::Failed(message))
@@ -621,7 +637,7 @@ pub(crate) fn compress_directory(
         Ok(output) => {
             let _ = archive::remove_archive_parts(output_dir, stem);
             return Err(PipelineError::Archive(format!(
-                "{} a échoué (code {})",
+                "{} failed (exit code {})",
                 compressor.label(),
                 output.code
             )));
@@ -631,7 +647,7 @@ pub(crate) fn compress_directory(
     }
 
     archive::finalize_volumes(output_dir, stem, compressor)
-        .map_err(|error| PipelineError::Archive(format!("volumes : {error}")))?;
+        .map_err(|error| PipelineError::Archive(format!("volumes: {error}")))?;
 
     Ok(CompressOutcome::Done(target))
 }
@@ -771,10 +787,15 @@ mod tests {
         let packer =
             Packer::with_preflight(PackOptions::for_tests(dir), Arc::new(fixture_preflight));
         packer.cancel();
-        let outcome = packer.run(
-            &GameJob::new(Platform::Linux64, "2379780"),
-            EventSink::noop(),
-        );
+        let (sink, receiver) = EventSink::channel();
+        let outcome = packer.run(&GameJob::new(Platform::Linux64, "2379780"), sink);
         assert!(matches!(outcome.status, PackStatus::Cancelled));
+        assert!(receiver.try_iter().any(|event| matches!(
+            event,
+            PackEvent::Finished {
+                status: FinishStatus::Cancelled,
+                ..
+            }
+        )));
     }
 }

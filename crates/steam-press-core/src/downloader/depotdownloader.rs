@@ -36,9 +36,8 @@ impl DepotDownloader {
         )
         .ok_or_else(|| DownloadError::MissingTool {
             tool: "DepotDownloader".to_string(),
-            expected:
-                "binaire DepotDownloader dans le PATH ou « depotdownloaderpath » dans les réglages"
-                    .to_string(),
+            expected: "DepotDownloader binary in PATH or `depotdownloaderpath` in the settings"
+                .to_string(),
         })
     }
 }
@@ -56,12 +55,12 @@ impl Downloader for DepotDownloader {
             Some(path) => ToolStatus {
                 available: true,
                 path: Some(path),
-                detail: "DepotDownloader détecté".to_string(),
+                detail: "DepotDownloader found".to_string(),
             },
             None => ToolStatus {
                 available: false,
                 path: None,
-                detail: "DepotDownloader introuvable".to_string(),
+                detail: "DepotDownloader not found".to_string(),
             },
         }
     }
@@ -73,7 +72,7 @@ impl Downloader for DepotDownloader {
     ) -> Result<DownloadReport, DownloadError> {
         let binary = self.locate()?;
         fs::create_dir_all(&request.work_dir)
-            .map_err(|error| DownloadError::Failed(format!("dossier de travail : {error}")))?;
+            .map_err(|error| DownloadError::Failed(format!("work directory: {error}")))?;
 
         let args = build_args(request);
         sink.emit(PackEvent::Log(format!(
@@ -115,7 +114,7 @@ impl Downloader for DepotDownloader {
     ) -> Result<WorkshopReport, DownloadError> {
         let binary = self.locate()?;
         fs::create_dir_all(&request.work_dir)
-            .map_err(|error| DownloadError::Failed(format!("dossier de travail : {error}")))?;
+            .map_err(|error| DownloadError::Failed(format!("work directory: {error}")))?;
 
         let mut command = Command::new(binary);
         command

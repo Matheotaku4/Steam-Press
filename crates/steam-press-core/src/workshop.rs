@@ -2,7 +2,7 @@
 
 use crate::archive;
 use crate::downloader::{self, Credentials, DownloadError, WorkshopRequest};
-use crate::events::{CancellationToken, EventSink, PackEvent, Stage};
+use crate::events::{CancellationToken, EventSink, FinishStatus, PackEvent, Stage};
 use crate::pack::{compress_directory, move_children, CompressOutcome, PackOptions};
 use crate::queue::WorkshopJob;
 use std::fmt;
@@ -24,12 +24,12 @@ pub struct WorkshopOutcome {
 impl fmt::Display for WorkshopOutcome {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let status = match &self.status {
-            PackStatus::Completed => "Terminé".to_string(),
-            PackStatus::Skipped => "Ignoré".to_string(),
-            PackStatus::Failed(message) => format!("Échec : {message}"),
-            PackStatus::Cancelled => "Annulé".to_string(),
+            PackStatus::Completed => "Completed".to_string(),
+            PackStatus::Skipped => "Skipped".to_string(),
+            PackStatus::Failed(message) => format!("Failed: {message}"),
+            PackStatus::Cancelled => "Cancelled".to_string(),
         };
-        write!(formatter, "{} — {status}", self.stem)
+        write!(formatter, "{} - {status}", self.stem)
     }
 }
 
@@ -61,12 +61,7 @@ impl WorkshopPacker {
         let output_dir = self.options.settings.output_dir(&self.options.paths);
 
         if let Err(error) = fs::create_dir_all(&output_dir) {
-            return self.failed(
-                &stem,
-                started,
-                &sink,
-                format!("dossier de sortie : {error}"),
-            );
+            return self.failed(&stem, started, &sink, format!("output directory: {error}"));
         }
 
         if archive::archive_exists(&output_dir, &stem, self.options.settings.compressor) {
@@ -74,7 +69,8 @@ impl WorkshopPacker {
                 archive::archive_path(&output_dir, &stem, self.options.settings.compressor);
             sink.emit(PackEvent::Finished {
                 job: stem.clone(),
-                outcome: "Ignoré (archive existante)".to_string(),
+                status: FinishStatus::Skipped,
+                outcome: "Archive already exists".to_string(),
                 output: Some(output.clone()),
             });
             return WorkshopOutcome {
@@ -86,19 +82,14 @@ impl WorkshopPacker {
         }
 
         if self.cancel.is_cancelled() {
-            return WorkshopOutcome {
-                status: PackStatus::Cancelled,
-                stem,
-                output: None,
-                duration: started.elapsed(),
-            };
+            return self.cancelled(stem, started, &sink);
         }
 
         sink.emit(PackEvent::Stage {
             job: stem.clone(),
             stage: Stage::Download,
             message: format!(
-                "Téléchargement de l'atelier {} / {}",
+                "Downloading workshop item {} / {}",
                 job.appid, job.workshop_id
             ),
         });
@@ -106,21 +97,11 @@ impl WorkshopPacker {
         let work_dir = self.options.paths.work_dir.join(&stem);
         if work_dir.exists() {
             if let Err(error) = fs::remove_dir_all(&work_dir) {
-                return self.failed(
-                    &stem,
-                    started,
-                    &sink,
-                    format!("dossier de travail : {error}"),
-                );
+                return self.failed(&stem, started, &sink, format!("work directory: {error}"));
             }
         }
         if let Err(error) = fs::create_dir_all(&work_dir) {
-            return self.failed(
-                &stem,
-                started,
-                &sink,
-                format!("dossier de travail : {error}"),
-            );
+            return self.failed(&stem, started, &sink, format!("work directory: {error}"));
         }
 
         let mut downloader =
@@ -140,35 +121,28 @@ impl WorkshopPacker {
 
         let report = match downloader.download_workshop(&request, &sink) {
             Ok(report) => report,
-            Err(DownloadError::Cancelled) => {
-                return WorkshopOutcome {
-                    status: PackStatus::Cancelled,
-                    stem,
-                    output: None,
-                    duration: started.elapsed(),
-                }
-            }
+            Err(DownloadError::Cancelled) => return self.cancelled(stem, started, &sink),
             Err(error) => return self.failed(&stem, started, &sink, error.to_string()),
         };
 
         sink.emit(PackEvent::Stage {
             job: stem.clone(),
             stage: Stage::Normalize,
-            message: "Préparation du contenu de l'atelier".to_string(),
+            message: "Preparing workshop content".to_string(),
         });
 
         let temp = work_dir.join("temp");
         if let Err(error) = fs::create_dir_all(&temp) {
-            return self.failed(&stem, started, &sink, format!("contenu : {error}"));
+            return self.failed(&stem, started, &sink, format!("content: {error}"));
         }
         if let Err(error) = move_children(&report.content_dir, &temp, &["temp"]) {
-            return self.failed(&stem, started, &sink, format!("contenu : {error}"));
+            return self.failed(&stem, started, &sink, format!("content: {error}"));
         }
 
         sink.emit(PackEvent::Stage {
             job: stem.clone(),
             stage: Stage::Archive,
-            message: "Compression de l'atelier".to_string(),
+            message: "Creating the workshop archive".to_string(),
         });
 
         let output = match compress_directory(
@@ -180,14 +154,7 @@ impl WorkshopPacker {
             &sink,
         ) {
             Ok(CompressOutcome::Done(path)) => path,
-            Ok(CompressOutcome::Cancelled) => {
-                return WorkshopOutcome {
-                    status: PackStatus::Cancelled,
-                    stem,
-                    output: None,
-                    duration: started.elapsed(),
-                }
-            }
+            Ok(CompressOutcome::Cancelled) => return self.cancelled(stem, started, &sink),
             Err(error) => return self.failed(&stem, started, &sink, error.to_string()),
         };
 
@@ -195,7 +162,8 @@ impl WorkshopPacker {
 
         sink.emit(PackEvent::Finished {
             job: stem.clone(),
-            outcome: "Terminé".to_string(),
+            status: FinishStatus::Completed,
+            outcome: "Completed".to_string(),
             output: Some(output.clone()),
         });
 
@@ -203,6 +171,21 @@ impl WorkshopPacker {
             status: PackStatus::Completed,
             stem,
             output: Some(output),
+            duration: started.elapsed(),
+        }
+    }
+
+    fn cancelled(&self, stem: String, started: Instant, sink: &EventSink) -> WorkshopOutcome {
+        sink.emit(PackEvent::Finished {
+            job: stem.clone(),
+            status: FinishStatus::Cancelled,
+            outcome: "Cancelled".to_string(),
+            output: None,
+        });
+        WorkshopOutcome {
+            status: PackStatus::Cancelled,
+            stem,
+            output: None,
             duration: started.elapsed(),
         }
     }
@@ -216,7 +199,8 @@ impl WorkshopPacker {
     ) -> WorkshopOutcome {
         sink.emit(PackEvent::Finished {
             job: stem.to_string(),
-            outcome: format!("Échec : {message}"),
+            status: FinishStatus::Failed,
+            outcome: message.clone(),
             output: None,
         });
         WorkshopOutcome {

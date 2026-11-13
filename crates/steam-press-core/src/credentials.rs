@@ -33,9 +33,9 @@ pub fn generate_key() -> String {
 fn decode_key(key_base64: &str) -> Result<[u8; KEY_LEN], String> {
     let bytes = STANDARD
         .decode(key_base64.trim())
-        .map_err(|_| "clé d'identifiants invalide".to_string())?;
+        .map_err(|_| "invalid credentials key".to_string())?;
     if bytes.len() != KEY_LEN {
-        return Err("la clé d'identifiants doit faire 32 octets".to_string());
+        return Err("the credentials key must be 32 bytes".to_string());
     }
     let mut key = [0u8; KEY_LEN];
     key.copy_from_slice(&bytes);
@@ -45,14 +45,14 @@ fn decode_key(key_base64: &str) -> Result<[u8; KEY_LEN], String> {
 pub fn encrypt(plaintext: &str, key_base64: &str) -> Result<String, String> {
     let key = decode_key(key_base64)?;
     let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|_| "initialisation du chiffrement impossible".to_string())?;
+        .map_err(|_| "could not initialize encryption".to_string())?;
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce_bytes);
     let nonce = Nonce::from_slice(&nonce_bytes);
     let ciphertext = cipher
         .encrypt(nonce, plaintext.as_bytes())
-        .map_err(|_| "chiffrement des identifiants impossible".to_string())?;
+        .map_err(|_| "could not encrypt the credentials".to_string())?;
 
     let mut payload = Vec::with_capacity(NONCE_LEN + ciphertext.len());
     payload.extend_from_slice(&nonce_bytes);
@@ -64,19 +64,19 @@ pub fn decrypt(encoded: &str, key_base64: &str) -> Result<String, String> {
     let key = decode_key(key_base64)?;
     let payload = STANDARD
         .decode(encoded.trim())
-        .map_err(|_| "fichier d'identifiants invalide".to_string())?;
+        .map_err(|_| "invalid credentials file".to_string())?;
     if payload.len() <= NONCE_LEN {
-        return Err("fichier d'identifiants tronqué".to_string());
+        return Err("truncated credentials file".to_string());
     }
 
     let (nonce_bytes, ciphertext) = payload.split_at(NONCE_LEN);
     let cipher = Aes256Gcm::new_from_slice(&key)
-        .map_err(|_| "initialisation du déchiffrement impossible".to_string())?;
+        .map_err(|_| "could not initialize decryption".to_string())?;
     let plaintext = cipher
         .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
-        .map_err(|_| "identifiants illisibles : mauvaise clé ou fichier corrompu".to_string())?;
+        .map_err(|_| "unreadable credentials: wrong key or corrupted file".to_string())?;
 
-    String::from_utf8(plaintext).map_err(|_| "identifiants non UTF-8".to_string())
+    String::from_utf8(plaintext).map_err(|_| "credentials are not UTF-8".to_string())
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +105,7 @@ impl CredentialStore {
 
     pub fn save(&self, credentials: &SavedCredentials, key: &str) -> Result<(), String> {
         if credentials.username.trim().is_empty() {
-            return Err("nom d'utilisateur vide".to_string());
+            return Err("empty username".to_string());
         }
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;

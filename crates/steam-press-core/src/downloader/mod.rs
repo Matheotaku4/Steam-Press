@@ -149,20 +149,20 @@ impl fmt::Display for DownloadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::MissingTool { tool, expected } => {
-                write!(formatter, "{tool} introuvable ({expected})")
+                write!(formatter, "{tool} not found ({expected})")
             }
             Self::InvalidCredentials => {
-                formatter.write_str("identifiants Steam invalides ou Steam Guard requis")
+                formatter.write_str("invalid Steam credentials or Steam Guard required")
             }
             Self::RateLimited => {
-                formatter.write_str("Steam limite temporairement les téléchargements")
+                formatter.write_str("Steam is temporarily rate limiting downloads")
             }
-            Self::NoSubscription => formatter.write_str("ce compte ne possède pas ce jeu"),
+            Self::NoSubscription => formatter.write_str("this account does not own the game"),
             Self::SteamGuardRequired => {
-                formatter.write_str("Steam Guard doit être validé avant de continuer")
+                formatter.write_str("Steam Guard must be approved before continuing")
             }
             Self::Failed(message) => formatter.write_str(message),
-            Self::Cancelled => formatter.write_str("opération annulée"),
+            Self::Cancelled => formatter.write_str("operation cancelled"),
         }
     }
 }

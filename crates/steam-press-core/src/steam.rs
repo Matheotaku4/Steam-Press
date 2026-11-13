@@ -37,7 +37,7 @@ fn client() -> Result<reqwest::blocking::Client, String> {
     reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(20))
         .build()
-        .map_err(|error| format!("client HTTP impossible : {error}"))
+        .map_err(|error| format!("HTTP client failed: {error}"))
 }
 
 fn get_text(url: &str) -> Result<String, String> {
@@ -45,13 +45,13 @@ fn get_text(url: &str) -> Result<String, String> {
         .get(url)
         .header(reqwest::header::USER_AGENT, USER_AGENT)
         .send()
-        .map_err(|error| format!("requête Steam impossible : {error}"))?;
+        .map_err(|error| format!("Steam request failed: {error}"))?;
     if !response.status().is_success() {
-        return Err(format!("Steam a répondu HTTP {}", response.status()));
+        return Err(format!("Steam returned HTTP {}", response.status()));
     }
     response
         .text()
-        .map_err(|error| format!("réponse Steam illisible : {error}"))
+        .map_err(|error| format!("unreadable Steam response: {error}"))
 }
 
 fn number_or_string(value: &Value) -> Option<String> {
@@ -64,7 +64,7 @@ fn number_or_string(value: &Value) -> Option<String> {
 
 pub fn parse_app_info(appid: &str, branch: &str, json: &str) -> Result<AppInfo, String> {
     let root: Value =
-        serde_json::from_str(json).map_err(|error| format!("JSON appinfo invalide : {error}"))?;
+        serde_json::from_str(json).map_err(|error| format!("invalid appinfo JSON: {error}"))?;
 
     if let Some(status) = root.get("status").and_then(Value::as_str) {
         if status != "success" {
@@ -75,7 +75,7 @@ pub fn parse_app_info(appid: &str, branch: &str, json: &str) -> Result<AppInfo, 
     let app = root
         .get("data")
         .and_then(|data| data.get(appid))
-        .ok_or_else(|| format!("aucune donnée appinfo pour {appid}"))?;
+        .ok_or_else(|| format!("no appinfo data for {appid}"))?;
 
     let name = app
         .pointer("/common/name")
@@ -83,7 +83,7 @@ pub fn parse_app_info(appid: &str, branch: &str, json: &str) -> Result<AppInfo, 
         .unwrap_or("")
         .to_string();
     if name.is_empty() {
-        return Err(format!("nom de jeu introuvable pour {appid}"));
+        return Err(format!("game name not found for {appid}"));
     }
 
     let install_dir = app
@@ -158,16 +158,16 @@ pub fn fetch_app_info(appid: &str, branch: &str) -> Result<AppInfo, String> {
 
 pub fn parse_store_info(appid: &str, json: &str) -> Result<StoreInfo, String> {
     let root: Value =
-        serde_json::from_str(json).map_err(|error| format!("JSON store invalide : {error}"))?;
+        serde_json::from_str(json).map_err(|error| format!("invalid store JSON: {error}"))?;
     let app = root
         .get(appid)
-        .ok_or_else(|| format!("aucune donnée store pour {appid}"))?;
+        .ok_or_else(|| format!("no store data for {appid}"))?;
     if !app.get("success").and_then(Value::as_bool).unwrap_or(false) {
         return Err(format!("fiche store indisponible pour {appid}"));
     }
     let data = app
         .get("data")
-        .ok_or_else(|| format!("fiche store vide pour {appid}"))?;
+        .ok_or_else(|| format!("empty store entry for {appid}"))?;
     Ok(StoreInfo {
         name: data
             .get("name")

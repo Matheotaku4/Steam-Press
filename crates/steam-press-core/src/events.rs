@@ -19,13 +19,33 @@ pub enum Stage {
 impl Stage {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Preflight => "Préflight",
-            Self::Download => "Téléchargement",
-            Self::Normalize => "Nettoyage",
+            Self::Preflight => "Preflight",
+            Self::Download => "Download",
+            Self::Normalize => "Cleanup",
             Self::Manifest => "Manifests",
-            Self::Archive => "Compression",
-            Self::Template => "Informations",
-            Self::Done => "Terminé",
+            Self::Archive => "Archive",
+            Self::Template => "Release info",
+            Self::Done => "Done",
+        }
+    }
+}
+
+/// Final state of a pipeline job, independent of its display message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinishStatus {
+    Completed,
+    Skipped,
+    Cancelled,
+    Failed,
+}
+
+impl FinishStatus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Completed => "Completed",
+            Self::Skipped => "Skipped",
+            Self::Cancelled => "Cancelled",
+            Self::Failed => "Failed",
         }
     }
 }
@@ -45,6 +65,7 @@ pub enum PackEvent {
     Log(String),
     Finished {
         job: String,
+        status: FinishStatus,
         outcome: String,
         output: Option<PathBuf>,
     },

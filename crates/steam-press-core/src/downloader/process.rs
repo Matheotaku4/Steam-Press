@@ -25,7 +25,7 @@ pub(crate) fn run_streaming(
 
     let mut child = command
         .spawn()
-        .map_err(|error| DownloadError::Failed(format!("lancement impossible : {error}")))?;
+        .map_err(|error| DownloadError::Failed(format!("could not start the process: {error}")))?;
 
     let mut readers = Vec::new();
     if let Some(stdout) = child.stdout.take() {
@@ -48,7 +48,7 @@ pub(crate) fn run_streaming(
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
             Err(error) => {
                 return Err(DownloadError::Failed(format!(
-                    "impossible de surveiller le processus : {error}"
+                    "could not monitor the process: {error}"
                 )))
             }
         }

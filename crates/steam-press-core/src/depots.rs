@@ -113,21 +113,18 @@ impl DepotNames {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
-            .map_err(|error| format!("client HTTP impossible : {error}"))?;
+            .map_err(|error| format!("HTTP client failed: {error}"))?;
         let response = client
             .get(url)
             .header(reqwest::header::USER_AGENT, USER_AGENT)
             .send()
-            .map_err(|error| format!("téléchargement des dépôts impossible : {error}"))?;
+            .map_err(|error| format!("could not download depot names: {error}"))?;
         if !response.status().is_success() {
-            return Err(format!(
-                "téléchargement des dépôts : HTTP {}",
-                response.status()
-            ));
+            return Err(format!("depot names download: HTTP {}", response.status()));
         }
         let body = response
             .text()
-            .map_err(|error| format!("lecture des dépôts impossible : {error}"))?;
+            .map_err(|error| format!("could not read depot names: {error}"))?;
         Ok(Self::parse(&body))
     }
 
