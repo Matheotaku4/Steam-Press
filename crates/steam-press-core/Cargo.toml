@@ -13,4 +13,3 @@ chrono = { version = "0.4", features = ["serde"] }
 aes-gcm = "0.10"
 base64 = "0.22"
 rand = "0.8"
-zip = { version = "2", default-features = false, features = ["deflate"] }
