@@ -1,7 +1,7 @@
 //! Downloader abstraction shared by SteamCMD and DepotDownloader.
 
 pub mod depotdownloader;
-mod process;
+pub(crate) mod process;
 pub mod steamcmd;
 
 use crate::config::Settings;
@@ -197,6 +197,7 @@ pub trait Downloader: Send {
         sink: &EventSink,
     ) -> Result<WorkshopReport, DownloadError>;
     fn cancel(&self);
+    fn cancel_token(&self) -> crate::events::CancellationToken;
 }
 
 /// Builds the configured engine. Both engines are stateless apart from their

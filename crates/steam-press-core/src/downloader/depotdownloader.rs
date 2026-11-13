@@ -141,6 +141,10 @@ impl Downloader for DepotDownloader {
     fn cancel(&self) {
         self.cancel.cancel();
     }
+
+    fn cancel_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
 }
 
 /// Builds sidecar arguments. The password never appears here: it would be

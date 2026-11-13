@@ -19,7 +19,7 @@ impl GameJob {
         Self {
             platform,
             appid: appid.into(),
-            branch: "Public".to_string(),
+            branch: "public".to_string(),
             branch_password: String::new(),
         }
     }
@@ -62,7 +62,7 @@ impl GameJob {
             .get(2)
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
-            .unwrap_or("Public")
+            .unwrap_or("public")
             .to_string();
         let job = Self {
             platform,
@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn tolerates_short_and_legacy_lines() {
         let job = GameJob::decode("win64|123").unwrap();
-        assert_eq!(job.branch, "Public");
+        assert_eq!(job.branch, "public");
         let workshop = WorkshopJob::decode("workshop_download_item 730 123456 validate").unwrap();
         assert_eq!(
             workshop,

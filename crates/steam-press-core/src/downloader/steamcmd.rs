@@ -169,6 +169,10 @@ impl Downloader for SteamCmd {
     fn cancel(&self) {
         self.cancel.cancel();
     }
+
+    fn cancel_token(&self) -> CancellationToken {
+        self.cancel.clone()
+    }
 }
 
 /// Builds the `+runscript` content for a game download.
