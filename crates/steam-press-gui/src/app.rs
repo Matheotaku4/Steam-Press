@@ -1,10 +1,9 @@
 //! egui desktop interface for Steam Press.
 
-use crate::state::{
-    EntryStatus, GameQueue, WorkshopQueue, WorkerEvent,
-};
+use crate::state::{EntryStatus, GameQueue, WorkerEvent, WorkshopQueue};
 use eframe::egui;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -107,6 +106,7 @@ pub struct SteamPressApp {
     status_message: Option<String>,
     error: Option<String>,
     running: bool,
+    cancel_requested: Arc<AtomicBool>,
     allow_close: bool,
     close_dialog: bool,
     receiver: Option<Receiver<WorkerEvent>>,
@@ -149,10 +149,7 @@ impl SteamPressApp {
         let sevenzip_text = path_text(settings.sevenzip_path.as_ref());
         let rar_text = path_text(settings.rar_path.as_ref());
         let template_text = path_text(settings.template.as_ref());
-        let custom_options_text = settings
-            .custom_compress_options
-            .clone()
-            .unwrap_or_default();
+        let custom_options_text = settings.custom_compress_options.clone().unwrap_or_default();
 
         Self {
             queue_io_path: paths
@@ -191,6 +188,7 @@ impl SteamPressApp {
             status_message: None,
             error: None,
             running: false,
+            cancel_requested: Arc::new(AtomicBool::new(false)),
             allow_close: false,
             close_dialog: false,
             receiver: None,
@@ -271,15 +269,22 @@ impl SteamPressApp {
         });
         let hook: SharedHook = Arc::new(Mutex::new(None));
         let thread_hook = hook.clone();
+        let cancel_requested = self.cancel_requested.clone();
 
         std::thread::spawn(move || {
             for job in jobs {
+                if cancel_requested.load(Ordering::SeqCst) {
+                    break;
+                }
                 let packer = Arc::new(Packer::new(options.clone()));
                 if let Ok(mut slot) = thread_hook.lock() {
                     let packer = packer.clone();
                     *slot = Some(Box::new(move || packer.cancel()));
                 }
                 let _ = packer.run(&job, sink.clone());
+                if cancel_requested.load(Ordering::SeqCst) {
+                    break;
+                }
             }
             if let Ok(mut slot) = thread_hook.lock() {
                 *slot = None;
@@ -315,15 +320,22 @@ impl SteamPressApp {
         });
         let hook: SharedHook = Arc::new(Mutex::new(None));
         let thread_hook = hook.clone();
+        let cancel_requested = self.cancel_requested.clone();
 
         std::thread::spawn(move || {
             for job in jobs {
+                if cancel_requested.load(Ordering::SeqCst) {
+                    break;
+                }
                 let packer = Arc::new(WorkshopPacker::new(options.clone()));
                 if let Ok(mut slot) = thread_hook.lock() {
                     let packer = packer.clone();
                     *slot = Some(Box::new(move || packer.cancel()));
                 }
                 let _ = packer.run(&job, sink.clone());
+                if cancel_requested.load(Ordering::SeqCst) {
+                    break;
+                }
             }
             if let Ok(mut slot) = thread_hook.lock() {
                 *slot = None;
@@ -343,6 +355,7 @@ impl SteamPressApp {
         self.log.clear();
         self.show_log = true;
         self.running = true;
+        self.cancel_requested.store(false, Ordering::SeqCst);
         self.game_queue.reset_statuses();
         self.workshop_queue.reset_statuses();
         self.receiver = Some(receiver);
@@ -350,6 +363,7 @@ impl SteamPressApp {
     }
 
     fn cancel(&mut self) {
+        self.cancel_requested.store(true, Ordering::SeqCst);
         if let Some(hook) = &self.cancel_hook {
             if let Ok(slot) = hook.lock() {
                 if let Some(cancel) = slot.as_ref() {
@@ -400,7 +414,9 @@ impl SteamPressApp {
                 }
                 self.push_log(format!("[{}] {message}", stage.label()));
             }
-            PackEvent::Progress { message, percent, .. } => {
+            PackEvent::Progress {
+                message, percent, ..
+            } => {
                 self.stage = message;
                 if let Some(percent) = percent {
                     self.progress = percent;
@@ -440,12 +456,11 @@ impl SteamPressApp {
         self.settings.sevenzip_path = path_or_none(&self.sevenzip_text);
         self.settings.rar_path = path_or_none(&self.rar_text);
         self.settings.template = path_or_none(&self.template_text);
-        self.settings.custom_compress_options =
-            if self.custom_options_text.trim().is_empty() {
-                None
-            } else {
-                Some(self.custom_options_text.trim().to_string())
-            };
+        self.settings.custom_compress_options = if self.custom_options_text.trim().is_empty() {
+            None
+        } else {
+            Some(self.custom_options_text.trim().to_string())
+        };
         self.settings.ensure_key();
         match self.settings.save(&self.paths) {
             Ok(()) => self.status_message = Some("Réglages enregistrés.".to_string()),
@@ -624,7 +639,14 @@ impl SteamPressApp {
                         let _ = std::fs::create_dir_all(&output);
                         let _ = tooling::open_folder(&output);
                     }
-                    if ui.button(if self.show_log { "Masquer le log" } else { "Afficher le log" }).clicked() {
+                    if ui
+                        .button(if self.show_log {
+                            "Masquer le log"
+                        } else {
+                            "Afficher le log"
+                        })
+                        .clicked()
+                    {
                         self.show_log = !self.show_log;
                     }
                 });
@@ -648,14 +670,15 @@ impl SteamPressApp {
                 .selected_text(self.game_form.platform.label())
                 .show_ui(ui, |ui| {
                     for platform in Platform::all() {
-                        ui.selectable_value(&mut self.game_form.platform, *platform, platform.label());
+                        ui.selectable_value(
+                            &mut self.game_form.platform,
+                            *platform,
+                            platform.label(),
+                        );
                     }
                 });
             ui.label("Branche");
-            ui.add(
-                egui::TextEdit::singleline(&mut self.game_form.branch)
-                    .desired_width(110.0),
-            );
+            ui.add(egui::TextEdit::singleline(&mut self.game_form.branch).desired_width(110.0));
             ui.add(
                 egui::TextEdit::singleline(&mut self.game_form.branch_password)
                     .password(true)
@@ -665,8 +688,10 @@ impl SteamPressApp {
             if ui.button("Ajouter").clicked() {
                 let appid = self.game_form.appid.trim();
                 if appid.parse::<u64>().map(|value| value > 0).unwrap_or(false) {
-                    let job = GameJob::new(self.game_form.platform, appid)
-                        .with_branch(self.game_form.branch.clone(), self.game_form.branch_password.clone());
+                    let job = GameJob::new(self.game_form.platform, appid).with_branch(
+                        self.game_form.branch.clone(),
+                        self.game_form.branch_password.clone(),
+                    );
                     if self.game_queue.push(job) {
                         self.game_form.appid.clear();
                         self.game_form.branch_password.clear();
@@ -961,7 +986,9 @@ impl SteamPressApp {
                     ui.end_row();
 
                     ui.label("Mot de passe d'archive");
-                    ui.add(egui::TextEdit::singleline(&mut self.settings.compress_password));
+                    ui.add(egui::TextEdit::singleline(
+                        &mut self.settings.compress_password,
+                    ));
                     ui.end_row();
 
                     ui.label("Compression désactivée");
@@ -1004,10 +1031,7 @@ impl SteamPressApp {
                     ui.end_row();
 
                     ui.label("RAR");
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.rar_text)
-                            .desired_width(360.0),
-                    );
+                    ui.add(egui::TextEdit::singleline(&mut self.rar_text).desired_width(360.0));
                     ui.end_row();
 
                     ui.label("Template");
@@ -1027,7 +1051,10 @@ impl SteamPressApp {
                     ui.end_row();
 
                     ui.label("Upload Crew");
-                    ui.checkbox(&mut self.settings.upload_crew_mode, "générer les infos Upload Crew");
+                    ui.checkbox(
+                        &mut self.settings.upload_crew_mode,
+                        "générer les infos Upload Crew",
+                    );
                     ui.end_row();
 
                     ui.label("Thème sombre");

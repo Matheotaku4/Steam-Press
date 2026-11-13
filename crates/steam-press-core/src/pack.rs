@@ -93,10 +93,11 @@ pub struct PackOptions {
 impl PackOptions {
     pub fn for_tests(directory: impl Into<PathBuf>) -> Self {
         let directory = directory.into();
-        let mut settings = Settings::default();
-        settings.output_dir = Some(directory.clone());
         Self {
-            settings,
+            settings: Settings {
+                output_dir: Some(directory.clone()),
+                ..Default::default()
+            },
             paths: Paths {
                 config_dir: directory.join("config"),
                 data_dir: directory.join("data"),
@@ -148,7 +149,11 @@ impl Packer {
         let preflight = match (self.preflight)(job) {
             Ok(preflight) => preflight,
             Err(error) => {
-                return failed_outcome(String::new(), started, PackStatus::Failed(error.to_string()))
+                return failed_outcome(
+                    String::new(),
+                    started,
+                    PackStatus::Failed(error.to_string()),
+                )
             }
         };
         let stem = naming::output_stem(
@@ -159,12 +164,12 @@ impl Packer {
         );
         let output_dir = self.options.settings.output_dir(&self.options.paths);
         let output = archive::archive_path(&output_dir, &stem, self.options.settings.compressor);
-        let status = if archive::archive_exists(&output_dir, &stem, self.options.settings.compressor)
-        {
-            PackStatus::Skipped
-        } else {
-            PackStatus::Completed
-        };
+        let status =
+            if archive::archive_exists(&output_dir, &stem, self.options.settings.compressor) {
+                PackStatus::Skipped
+            } else {
+                PackStatus::Completed
+            };
         PackOutcome {
             status,
             stem,
@@ -179,7 +184,7 @@ impl Packer {
 
     pub fn run(&self, job: &GameJob, sink: EventSink) -> PackOutcome {
         let started = Instant::now();
-        let label = job.appid.clone();
+        let label = job.encode();
 
         sink.emit(PackEvent::Stage {
             job: label.clone(),
@@ -211,7 +216,8 @@ impl Packer {
         }
 
         if archive::archive_exists(&output_dir, &stem, self.options.settings.compressor) {
-            let output = archive::archive_path(&output_dir, &stem, self.options.settings.compressor);
+            let output =
+                archive::archive_path(&output_dir, &stem, self.options.settings.compressor);
             sink.emit(PackEvent::Finished {
                 job: label,
                 outcome: "Ignoré (archive existante)".to_string(),
@@ -230,7 +236,8 @@ impl Packer {
         }
 
         if self.options.dry_run {
-            let output = archive::archive_path(&output_dir, &stem, self.options.settings.compressor);
+            let output =
+                archive::archive_path(&output_dir, &stem, self.options.settings.compressor);
             return PackOutcome {
                 status: PackStatus::Completed,
                 stem,
@@ -250,20 +257,37 @@ impl Packer {
         sink.emit(PackEvent::Stage {
             job: label.clone(),
             stage: Stage::Download,
-            message: format!("Téléchargement de {} ({})", preflight.name, job.platform.label()),
+            message: format!(
+                "Téléchargement de {} ({})",
+                preflight.name,
+                job.platform.label()
+            ),
         });
 
         let work_dir = self.options.paths.work_dir.join(&stem);
         if work_dir.exists() {
             if let Err(error) = fs::remove_dir_all(&work_dir) {
-                return self.failed(job, &stem, started, &sink, format!("dossier de travail : {error}"));
+                return self.failed(
+                    job,
+                    &stem,
+                    started,
+                    &sink,
+                    format!("dossier de travail : {error}"),
+                );
             }
         }
         if let Err(error) = fs::create_dir_all(&work_dir) {
-            return self.failed(job, &stem, started, &sink, format!("dossier de travail : {error}"));
+            return self.failed(
+                job,
+                &stem,
+                started,
+                &sink,
+                format!("dossier de travail : {error}"),
+            );
         }
 
-        let mut downloader = downloader::create(self.options.downloader_kind, &self.options.settings);
+        let mut downloader =
+            downloader::create(self.options.downloader_kind, &self.options.settings);
         if let Ok(mut slot) = self.active_cancel.lock() {
             *slot = Some(downloader.cancel_token());
         }
@@ -323,7 +347,9 @@ impl Packer {
             }
             match acf::read_manifest(&acf_path) {
                 Ok(manifest) => Some(manifest),
-                Err(error) => return self.failed(job, &stem, started, &sink, format!("manifeste : {error}")),
+                Err(error) => {
+                    return self.failed(job, &stem, started, &sink, format!("manifeste : {error}"))
+                }
             }
         } else {
             let install_dir = install_dir_name(&preflight);
@@ -507,7 +533,7 @@ impl Packer {
         message: String,
     ) -> PackOutcome {
         sink.emit(PackEvent::Finished {
-            job: job.appid.clone(),
+            job: job.encode(),
             outcome: format!("Échec : {message}"),
             output: None,
         });
@@ -579,7 +605,8 @@ pub(crate) fn compress_directory(
     }
 
     let compressor = settings.compressor;
-    let binary = archive::compressor_binary(compressor, settings).map_err(PipelineError::Archive)?;
+    let binary =
+        archive::compressor_binary(compressor, settings).map_err(PipelineError::Archive)?;
     let target = archive::archive_path(output_dir, stem, compressor);
     let args = compressor.args(
         settings.custom_compress_options.as_deref(),
@@ -623,7 +650,9 @@ fn directory_size(path: &Path) -> u64 {
         return 0;
     }
     if path.is_file() {
-        return fs::metadata(path).map(|metadata| metadata.len()).unwrap_or(0);
+        return fs::metadata(path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
     }
     let mut total = 0;
     if let Ok(entries) = fs::read_dir(path) {
@@ -712,7 +741,8 @@ mod tests {
     fn skips_when_archive_already_exists() {
         let dir = temp_dir("pack-skip");
         fs::write(dir.join("Balatro.Build.18674832.Linux64.public.7z"), b"x").unwrap();
-        let packer = Packer::with_preflight(PackOptions::for_tests(dir), Arc::new(fixture_preflight));
+        let packer =
+            Packer::with_preflight(PackOptions::for_tests(dir), Arc::new(fixture_preflight));
         let outcome = packer.run(
             &GameJob::new(Platform::Linux64, "2379780"),
             EventSink::noop(),
@@ -724,7 +754,8 @@ mod tests {
     #[test]
     fn dry_run_reports_naming_without_downloading() {
         let dir = temp_dir("pack-dry");
-        let packer = Packer::with_preflight(PackOptions::for_tests(dir), Arc::new(fixture_preflight));
+        let packer =
+            Packer::with_preflight(PackOptions::for_tests(dir), Arc::new(fixture_preflight));
         let outcome = packer.run_dry(&GameJob::new(Platform::Linux64, "2379780"));
         assert!(matches!(outcome.status, PackStatus::Completed));
         assert_eq!(outcome.stem, "Balatro.Build.18674832.Linux64.public");
@@ -737,7 +768,8 @@ mod tests {
     #[test]
     fn cancellation_is_observable_before_downloading() {
         let dir = temp_dir("pack-cancel");
-        let packer = Packer::with_preflight(PackOptions::for_tests(dir), Arc::new(fixture_preflight));
+        let packer =
+            Packer::with_preflight(PackOptions::for_tests(dir), Arc::new(fixture_preflight));
         packer.cancel();
         let outcome = packer.run(
             &GameJob::new(Platform::Linux64, "2379780"),
