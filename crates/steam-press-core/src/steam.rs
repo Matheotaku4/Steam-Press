@@ -104,9 +104,9 @@ pub fn parse_app_info(appid: &str, branch: &str, json: &str) -> Result<AppInfo, 
 
     let build_time = branch_object
         .and_then(|branch| branch.get("timeupdated"))
-        .and_then(Value::as_u64)
-        .and_then(|seconds| DateTime::from_timestamp(seconds as i64, 0))
-        .map(|timestamp: DateTime<Utc>| timestamp);
+        .and_then(number_or_string)
+        .and_then(|seconds| seconds.parse::<i64>().ok())
+        .and_then(|seconds| DateTime::from_timestamp(seconds, 0));
 
     let mut depots = Vec::new();
     if let Some(depots_object) = depots_object.and_then(Value::as_object) {

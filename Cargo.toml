@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["crates/steam-press-core"]
+members = ["crates/steam-press-core", "crates/steam-press-cli"]

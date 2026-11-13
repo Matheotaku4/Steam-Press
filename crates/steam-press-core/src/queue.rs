@@ -185,13 +185,29 @@ pub fn parse_workshop_queue(content: &str) -> QueueLoad<WorkshopJob> {
 }
 
 pub fn load_game_queue(path: impl AsRef<Path>) -> Result<QueueLoad<GameJob>, String> {
-    let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    Ok(parse_game_queue(&content))
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(parse_game_queue(&content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(QueueLoad::default()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 pub fn load_workshop_queue(path: impl AsRef<Path>) -> Result<QueueLoad<WorkshopJob>, String> {
-    let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    Ok(parse_workshop_queue(&content))
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(parse_workshop_queue(&content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(QueueLoad::default()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn write_queue(path: impl AsRef<Path>, content: &str) -> Result<(), String> {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+    }
+    fs::write(path, content).map_err(|error| error.to_string())
 }
 
 pub fn save_game_queue(path: impl AsRef<Path>, jobs: &[GameJob]) -> Result<(), String> {
@@ -200,7 +216,7 @@ pub fn save_game_queue(path: impl AsRef<Path>, jobs: &[GameJob]) -> Result<(), S
         content.push_str(&job.encode());
         content.push('\n');
     }
-    fs::write(path, content).map_err(|error| error.to_string())
+    write_queue(path, &content)
 }
 
 pub fn save_workshop_queue(path: impl AsRef<Path>, jobs: &[WorkshopJob]) -> Result<(), String> {
@@ -209,7 +225,7 @@ pub fn save_workshop_queue(path: impl AsRef<Path>, jobs: &[WorkshopJob]) -> Resu
         content.push_str(&job.encode());
         content.push('\n');
     }
-    fs::write(path, content).map_err(|error| error.to_string())
+    write_queue(path, &content)
 }
 
 #[cfg(test)]
@@ -250,6 +266,13 @@ mod tests {
         assert_eq!(load.jobs.len(), 2);
         assert_eq!(load.jobs[1].branch, "beta");
         assert_eq!(load.warnings.len(), 1);
+    }
+
+    #[test]
+    fn missing_files_load_as_empty_queues() {
+        let dir = crate::test_support::temp_dir("queue-missing");
+        assert!(load_game_queue(dir.join("absent.sspq")).unwrap().jobs.is_empty());
+        assert!(load_workshop_queue(dir.join("absent.sswq")).unwrap().jobs.is_empty());
     }
 
     #[test]

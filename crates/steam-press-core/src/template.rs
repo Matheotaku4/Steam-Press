@@ -1,17 +1,20 @@
 //! cs.rin.ru release notes: built-in SuperSteamPacker renders and editable tokens.
 
 use chrono::{DateTime, Datelike, Timelike, Utc};
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TemplateDepot {
     pub depot_id: String,
     pub depot_name: String,
     pub manifest_id: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct TemplateData {
     pub game_name: String,
     pub os: String,
