@@ -2,6 +2,7 @@ name: Release
 
 on:
   push:
+    branches: [main]
     tags:
       - "v*"
 
@@ -10,9 +11,40 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  GH_REPO: ${{ github.repository }}
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      publish: ${{ steps.release.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read crate version
+        id: version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/steam-press-core/Cargo.toml | head -1)
+          if [ -z "$version" ]; then
+            echo "version not found in crates/steam-press-core/Cargo.toml" >&2
+            exit 1
+          fi
+          echo "value=$version" >> "$GITHUB_OUTPUT"
+      - name: Check for an existing release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.version.outputs.value }}" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "v${{ steps.version.outputs.value }} is already published."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
   linux-x86_64:
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,23 +53,24 @@ jobs:
         run: cargo build --release --locked -p steam-press-cli -p steam-press-gui
       - name: Package
         shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          name="steam-press-${version}-linux-x86_64"
+          name="steam-press-${VERSION}-linux-x86_64"
           mkdir -p "dist/${name}/docs"
           cp target/release/steam-press target/release/steam-press-gui "dist/${name}/"
           cp README.md "dist/${name}/"
           cp docs/usage.md "dist/${name}/docs/"
           tar -C dist -czf "dist/${name}.tar.gz" "${name}"
           (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
-          echo "ASSET_NAME=${name}" >> "$GITHUB_ENV"
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            "dist/${ASSET_NAME}.tar.gz" \
-            "dist/${ASSET_NAME}.tar.gz.sha256" \
-            --title "Steam Press ${GITHUB_REF_NAME}" \
+          version="${{ needs.prepare.outputs.version }}"
+          gh release create "v${version}" \
+            "dist/steam-press-${version}-linux-x86_64.tar.gz" \
+            "dist/steam-press-${version}-linux-x86_64.tar.gz.sha256" \
+            --title "Steam Press v${version}" \
             --generate-notes

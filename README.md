@@ -53,7 +53,9 @@ Binaries land in `target/release/steam-press` and `target/release/steam-press-gu
 
 ## Releases
 
-GitHub Actions builds and publishes the Linux binaries when a `v*` tag is pushed:
+GitHub Actions publishes the Linux binaries when the version in
+`crates/steam-press-core/Cargo.toml` does not have a release yet, and when a matching `v*`
+tag is pushed. To force a release after a manual version bump:
 
 ```bash
 git tag -a v0.1.0 -m "Steam Press 0.1.0"
