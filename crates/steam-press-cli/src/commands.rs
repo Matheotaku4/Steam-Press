@@ -25,6 +25,7 @@ pub fn dispatch(cli: Cli) -> Result<ExitCode, String> {
         Command::Doctor => doctor(&cli),
         Command::Login(args) => login(&cli, args),
         Command::Info(args) => info(&cli, args),
+        Command::Search { term } => search(term),
         Command::Queue { action } => queue(&cli, action),
         Command::Pack(args) => pack(&cli, args),
         Command::Workshop { action } => workshop(&cli, action),
@@ -138,6 +139,23 @@ fn info(cli: &Cli, args: &InfoArgs) -> Result<ExitCode, String> {
         if let Some(website) = store.website {
             println!("{website}");
         }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn search(term: &str) -> Result<ExitCode, String> {
+    let term = term.trim();
+    if term.chars().count() < 2 {
+        return Err("search term must be at least two characters".to_string());
+    }
+    let results = steam::search_store(term)?;
+    if results.is_empty() {
+        println!("No games found for \"{term}\".");
+        return Ok(ExitCode::SUCCESS);
+    }
+    println!("{} result(s) for \"{term}\":", results.len());
+    for item in results {
+        println!("{:>10}  {}", item.appid, item.name);
     }
     Ok(ExitCode::SUCCESS)
 }

@@ -2859,7 +2859,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "steam-press-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "rpassword",
@@ -2869,7 +2869,7 @@ dependencies = [
 
 [[package]]
 name = "steam-press-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
@@ -2882,7 +2882,7 @@ dependencies = [
 
 [[package]]
 name = "steam-press-gui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "eframe",
  "steam-press-core",

@@ -40,6 +40,11 @@ pub enum Command {
     Login(LoginArgs),
     /// Show Steam metadata for an app.
     Info(InfoArgs),
+    /// Search the Steam store by game name.
+    Search {
+        /// Game name to search for.
+        term: String,
+    },
     /// Manage game queue files.
     Queue {
         #[command(subcommand)]
@@ -263,6 +268,15 @@ mod tests {
         Cli::command().debug_assert();
         let matches = Cli::try_parse_from(["steam-press", "depots", "lookup", "10"]).unwrap();
         assert!(matches!(matches.command, Command::Depots { .. }));
+    }
+
+    #[test]
+    fn search_takes_a_game_name() {
+        let matches = Cli::try_parse_from(["steam-press", "search", "half-life"]).unwrap();
+        match matches.command {
+            Command::Search { term } => assert_eq!(term, "half-life"),
+            _ => panic!("expected search"),
+        }
     }
 
     #[test]

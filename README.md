@@ -13,7 +13,8 @@ macOS support can be added later.
 ## Features
 
 - Game queue with platform, branch and protected-branch support.
-- Search the Steam store by name to fill an App ID, with Lucide icons throughout the GUI.
+- Search the Steam store by name to fill an App ID, from the CLI or the GUI (with Lucide
+  icons throughout).
 - Workshop queue (`workshop_download_item`).
 - Two download engines behind one abstraction: **SteamCMD** (default) and **DepotDownloader**.
 - `.acf` reading, privacy sanitizing (`LastOwner`/`LauncherPath` set to `"0"`) and full
@@ -59,8 +60,8 @@ GitHub Actions publishes the Linux binaries when the version in
 tag is pushed. To force a release after a manual version bump:
 
 ```bash
-git tag -a v0.3.0 -m "Steam Press 0.3.0"
-git push origin v0.3.0
+git tag -a v0.3.1 -m "Steam Press 0.3.1"
+git push origin v0.3.1
 ```
 
 Each release contains `steam-press`, `steam-press-gui`, the README, the usage guide and a
@@ -72,6 +73,9 @@ push to `main` and on pull requests.
 ```bash
 # Save Steam credentials (encrypted locally), or use --anonymous later.
 steam-press login
+
+# Find a game by name.
+steam-press search "half-life"
 
 # Inspect an app.
 steam-press info 2379780

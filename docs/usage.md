@@ -33,6 +33,14 @@ dossier de sortie inscriptible.
 
 ## 3. File de jeux
 
+Pour retrouver un AppID à partir du nom du jeu :
+
+```bash
+steam-press search "half-life"
+```
+
+La commande interroge le Steam Store et affiche l'AppID et le nom des résultats.
+
 ```bash
 steam-press queue add 2379780 --os lin64 --branch public
 steam-press queue add 123456 --os win64 --branch beta --branch-password secret
