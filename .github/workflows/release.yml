@@ -48,12 +48,12 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.publish == 'true'
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+    continue-on-error: ${{ matrix.os != 'ubuntu-22.04' }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             platform: linux-x86_64
             exe_suffix: ""
           - os: macos-15-intel
@@ -106,11 +106,14 @@ jobs:
           tar -C dist -czf "dist/${gui}.tar.gz" "${gui}"
 
           checksum() {
+            name="$(basename "$1")"
+            cd dist
             if command -v sha256sum >/dev/null 2>&1; then
-              sha256sum "$1" > "$1.sha256"
+              sha256sum "$name" > "$name.sha256"
             else
-              shasum -a 256 "$1" > "$1.sha256"
+              shasum -a 256 "$name" > "$name.sha256"
             fi
+            cd ..
           }
           checksum "dist/${combined}.tar.gz"
           checksum "dist/${cli}.tar.gz"

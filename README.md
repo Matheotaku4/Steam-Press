@@ -70,7 +70,8 @@ Binaries land in `target/release/steam-press` and `target/release/steam-press-gu
 
 GitHub Actions publishes one release when the version in
 `crates/steam-press-core/Cargo.toml` has no matching release yet. A build matrix produces the
-same three archives for Linux, macOS (Intel and Apple Silicon) and Windows (x86_64):
+same three archives for Linux, macOS (Intel and Apple Silicon) and Windows (x86_64).
+Linux archives are built on Ubuntu 22.04 (glibc 2.35) for broad compatibility:
 
 - `steam-press-<version>-<platform>.tar.gz` with both binaries, the README and the guide;
 - `steam-press-cli-<version>-<platform>.tar.gz` with the CLI only;
@@ -80,8 +81,8 @@ same three archives for Linux, macOS (Intel and Apple Silicon) and Windows (x86_
 `.sha256` file, and `SHA256SUMS` covers every archive. To publish from a tag instead:
 
 ```bash
-git tag -a v0.6.0 -m "Steam Press 0.6.0"
-git push origin v0.6.0
+git tag -a v0.6.1 -m "Steam Press 0.6.1"
+git push origin v0.6.1
 ```
 
 The GUI checks the main `v*` releases on startup and from **Settings > Updates**. It downloads
