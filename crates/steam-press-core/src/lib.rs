@@ -5,6 +5,7 @@
 //! archives and release templates. It has no GUI dependency.
 
 pub mod acf;
+pub mod archive;
 pub mod compressor;
 pub mod config;
 pub mod credentials;
@@ -16,6 +17,7 @@ pub mod naming;
 pub mod platform;
 pub mod queue;
 pub mod steam;
+pub mod template;
 pub mod test_support;
 pub mod tooling;
 pub mod vdf;
