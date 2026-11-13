@@ -2047,12 +2047,12 @@ fn game_row(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_enabled_ui(!locked, |ui| {
                         if ui.small_button("×").clicked() {
-                                action = Some(RowAction::Remove(index));
-                            }
-                            if ui.small_button("↓").clicked() {
-                                action = Some(RowAction::Down(index));
-                            }
-                            if ui.small_button("↑").clicked() {
+                            action = Some(RowAction::Remove(index));
+                        }
+                        if ui.small_button("↓").clicked() {
+                            action = Some(RowAction::Down(index));
+                        }
+                        if ui.small_button("↑").clicked() {
                             action = Some(RowAction::Up(index));
                         }
                     });
@@ -2103,12 +2103,12 @@ fn workshop_row(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_enabled_ui(!locked, |ui| {
                         if ui.small_button("×").clicked() {
-                                action = Some(RowAction::Remove(index));
-                            }
-                            if ui.small_button("↓").clicked() {
-                                action = Some(RowAction::Down(index));
-                            }
-                            if ui.small_button("↑").clicked() {
+                            action = Some(RowAction::Remove(index));
+                        }
+                        if ui.small_button("↓").clicked() {
+                            action = Some(RowAction::Down(index));
+                        }
+                        if ui.small_button("↑").clicked() {
                             action = Some(RowAction::Up(index));
                         }
                     });
