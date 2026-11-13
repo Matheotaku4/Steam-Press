@@ -58,8 +58,8 @@ GitHub Actions publishes the Linux binaries when the version in
 tag is pushed. To force a release after a manual version bump:
 
 ```bash
-git tag -a v0.1.0 -m "Steam Press 0.1.0"
-git push origin v0.1.0
+git tag -a v0.2.0 -m "Steam Press 0.2.0"
+git push origin v0.2.0
 ```
 
 Each release contains `steam-press`, `steam-press-gui`, the README, the usage guide and a
