@@ -2,19 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Compressor {
+    #[default]
     #[serde(rename = "7z")]
     SevenZip,
     #[serde(rename = "rar")]
     Rar,
-}
-
-impl Default for Compressor {
-    fn default() -> Self {
-        Self::SevenZip
-    }
 }
 
 impl Compressor {
@@ -43,7 +38,12 @@ impl Compressor {
     }
 
     pub fn from_extension(extension: &str) -> Option<Self> {
-        match extension.trim().trim_start_matches('.').to_ascii_lowercase().as_str() {
+        match extension
+            .trim()
+            .trim_start_matches('.')
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "7z" | "001" => Some(Self::SevenZip),
             "rar" => Some(Self::Rar),
             _ => None,

@@ -1,9 +1,7 @@
 //! Workshop item pipeline: download, normalize, archive.
 
 use crate::archive;
-use crate::downloader::{
-    self, Credentials, DownloadError, WorkshopRequest,
-};
+use crate::downloader::{self, Credentials, DownloadError, WorkshopRequest};
 use crate::events::{CancellationToken, EventSink, PackEvent, Stage};
 use crate::pack::{compress_directory, move_children, CompressOutcome, PackOptions};
 use crate::queue::WorkshopJob;
@@ -63,11 +61,17 @@ impl WorkshopPacker {
         let output_dir = self.options.settings.output_dir(&self.options.paths);
 
         if let Err(error) = fs::create_dir_all(&output_dir) {
-            return self.failed(&stem, started, &sink, format!("dossier de sortie : {error}"));
+            return self.failed(
+                &stem,
+                started,
+                &sink,
+                format!("dossier de sortie : {error}"),
+            );
         }
 
         if archive::archive_exists(&output_dir, &stem, self.options.settings.compressor) {
-            let output = archive::archive_path(&output_dir, &stem, self.options.settings.compressor);
+            let output =
+                archive::archive_path(&output_dir, &stem, self.options.settings.compressor);
             sink.emit(PackEvent::Finished {
                 job: stem.clone(),
                 outcome: "Ignoré (archive existante)".to_string(),
@@ -93,20 +97,34 @@ impl WorkshopPacker {
         sink.emit(PackEvent::Stage {
             job: stem.clone(),
             stage: Stage::Download,
-            message: format!("Téléchargement de l'atelier {} / {}", job.appid, job.workshop_id),
+            message: format!(
+                "Téléchargement de l'atelier {} / {}",
+                job.appid, job.workshop_id
+            ),
         });
 
         let work_dir = self.options.paths.work_dir.join(&stem);
         if work_dir.exists() {
             if let Err(error) = fs::remove_dir_all(&work_dir) {
-                return self.failed(&stem, started, &sink, format!("dossier de travail : {error}"));
+                return self.failed(
+                    &stem,
+                    started,
+                    &sink,
+                    format!("dossier de travail : {error}"),
+                );
             }
         }
         if let Err(error) = fs::create_dir_all(&work_dir) {
-            return self.failed(&stem, started, &sink, format!("dossier de travail : {error}"));
+            return self.failed(
+                &stem,
+                started,
+                &sink,
+                format!("dossier de travail : {error}"),
+            );
         }
 
-        let mut downloader = downloader::create(self.options.downloader_kind, &self.options.settings);
+        let mut downloader =
+            downloader::create(self.options.downloader_kind, &self.options.settings);
         if let Ok(mut slot) = self.active_cancel.lock() {
             *slot = Some(downloader.cancel_token());
         }
@@ -220,10 +238,7 @@ mod tests {
         let dir = temp_dir("workshop-skip");
         fs::write(dir.join("Workshop_730_999.7z"), b"x").unwrap();
         let packer = WorkshopPacker::new(PackOptions::for_tests(dir));
-        let outcome = packer.run(
-            &WorkshopJob::new("730", "999"),
-            EventSink::noop(),
-        );
+        let outcome = packer.run(&WorkshopJob::new("730", "999"), EventSink::noop());
         assert!(matches!(outcome.status, PackStatus::Skipped));
         assert_eq!(outcome.stem, "Workshop_730_999");
     }

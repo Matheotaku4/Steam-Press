@@ -58,7 +58,7 @@ impl TemplateData {
     }
 
     fn display_name(&self) -> String {
-        self.game_name.replace('_', " ").replace('.', " ")
+        self.game_name.replace(['_', '.'], " ")
     }
 }
 
@@ -159,8 +159,14 @@ fn tokens(data: &TemplateData, depot: Option<&TemplateDepot>) -> Vec<(String, St
         ("{{os}}".to_string(), data.os.clone()),
         ("{{branch}}".to_string(), data.branch.clone()),
         ("{{build_id}}".to_string(), data.build_id.clone()),
-        ("{{build_datetime_utc}}".to_string(), data.build_datetime.clone()),
-        ("{{upload_datetime_utc}}".to_string(), data.upload_datetime.clone()),
+        (
+            "{{build_datetime_utc}}".to_string(),
+            data.build_datetime.clone(),
+        ),
+        (
+            "{{upload_datetime_utc}}".to_string(),
+            data.upload_datetime.clone(),
+        ),
         ("{{app_id}}".to_string(), data.app_id.clone()),
         ("{{description}}".to_string(), data.description.clone()),
         (
@@ -173,7 +179,9 @@ fn tokens(data: &TemplateData, depot: Option<&TemplateDepot>) -> Vec<(String, St
         ("{{depot_list}}".to_string(), data.depot_list()),
         (
             "{{primary_depot_id}}".to_string(),
-            primary.map(|depot| depot.depot_id.clone()).unwrap_or_default(),
+            primary
+                .map(|depot| depot.depot_id.clone())
+                .unwrap_or_default(),
         ),
         (
             "{{primary_manifest_id}}".to_string(),
@@ -323,17 +331,28 @@ mod tests {
     fn writes_info_files() {
         let dir = crate::test_support::temp_dir("templates");
         let data = sample_template_data();
-        let paths = write_info_files(&dir, "Balatro.Build.1.Linux64.public", &data, true, None)
-            .unwrap();
+        let paths =
+            write_info_files(&dir, "Balatro.Build.1.Linux64.public", &data, true, None).unwrap();
         assert_eq!(paths.len(), 2);
-        assert!(paths[0].file_name().unwrap().to_string_lossy().starts_with("[CS.RIN.RU Info]"));
-        assert!(paths[1].file_name().unwrap().to_string_lossy().starts_with("[Upload Crew Info]"));
+        assert!(paths[0]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("[CS.RIN.RU Info]"));
+        assert!(paths[1]
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .starts_with("[Upload Crew Info]"));
     }
 
     #[test]
     fn formats_utc_datetimes() {
         use chrono::TimeZone;
         let when = Utc.with_ymd_and_hms(2026, 11, 13, 9, 5, 3).unwrap();
-        assert_eq!(format_utc_datetime(when), "November 13, 2026 - 09:05:03 UTC");
+        assert_eq!(
+            format_utc_datetime(when),
+            "November 13, 2026 - 09:05:03 UTC"
+        );
     }
 }

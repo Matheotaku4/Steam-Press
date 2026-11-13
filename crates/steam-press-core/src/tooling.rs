@@ -102,7 +102,11 @@ mod tests {
 
     #[test]
     fn missing_explicit_path_falls_back_to_path() {
-        assert!(find_executable(Some(Path::new("/definitely/not/here")), &["definitely-not-a-tool"]).is_none());
+        assert!(find_executable(
+            Some(Path::new("/definitely/not/here")),
+            &["definitely-not-a-tool"]
+        )
+        .is_none());
     }
 
     #[cfg(unix)]

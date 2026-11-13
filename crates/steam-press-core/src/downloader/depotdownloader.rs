@@ -98,7 +98,11 @@ impl Downloader for DepotDownloader {
             .join(format!("appmanifest_{}.acf", request.appid));
         Ok(DownloadReport {
             content_dir: request.work_dir.clone(),
-            app_manifest: if manifest.is_file() { Some(manifest) } else { None },
+            app_manifest: if manifest.is_file() {
+                Some(manifest)
+            } else {
+                None
+            },
             depots: Vec::new(),
             build_id: String::new(),
         })
@@ -122,7 +126,9 @@ impl Downloader for DepotDownloader {
             .arg("-dir")
             .arg(&request.work_dir);
         if !request.credentials.is_anonymous() {
-            command.arg("-username").arg(request.credentials.username.trim());
+            command
+                .arg("-username")
+                .arg(request.credentials.username.trim());
         }
 
         let output = run_streaming(command, &self.cancel, sink)?;

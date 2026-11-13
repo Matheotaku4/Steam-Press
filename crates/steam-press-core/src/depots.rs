@@ -24,7 +24,10 @@ impl DepotNames {
             if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
                 continue;
             }
-            if let Some(name) = line.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) {
+            if let Some(name) = line
+                .strip_prefix('[')
+                .and_then(|rest| rest.strip_suffix(']'))
+            {
                 in_depots = name.trim().eq_ignore_ascii_case("depots");
                 continue;
             }
@@ -117,7 +120,10 @@ impl DepotNames {
             .send()
             .map_err(|error| format!("téléchargement des dépôts impossible : {error}"))?;
         if !response.status().is_success() {
-            return Err(format!("téléchargement des dépôts : HTTP {}", response.status()));
+            return Err(format!(
+                "téléchargement des dépôts : HTTP {}",
+                response.status()
+            ));
         }
         let body = response
             .text()
@@ -159,9 +165,8 @@ mod tests {
 
     #[test]
     fn ignores_other_sections_and_comments() {
-        let names = DepotNames::parse(
-            "; comment\n[metadata]\n10 = Wrong\n[depots]\n# note\n20 = Right\n",
-        );
+        let names =
+            DepotNames::parse("; comment\n[metadata]\n10 = Wrong\n[depots]\n# note\n20 = Right\n");
         assert!(names.get("10").is_none());
         assert_eq!(names.get("20"), Some("Right"));
     }

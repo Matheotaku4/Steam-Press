@@ -68,7 +68,10 @@ impl GameJob {
             platform,
             appid: parts[1].trim().to_string(),
             branch,
-            branch_password: parts.get(3).map(|value| value.trim().to_string()).unwrap_or_default(),
+            branch_password: parts
+                .get(3)
+                .map(|value| value.trim().to_string())
+                .unwrap_or_default(),
         };
         job.validate()?;
         Ok(job)
@@ -91,7 +94,12 @@ impl WorkshopJob {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        let appid_ok = self.appid.trim().parse::<u64>().map(|value| value > 0).unwrap_or(false);
+        let appid_ok = self
+            .appid
+            .trim()
+            .parse::<u64>()
+            .map(|value| value > 0)
+            .unwrap_or(false);
         let workshop_ok = self
             .workshop_id
             .trim()
@@ -147,7 +155,7 @@ impl<T> Default for QueueLoad<T> {
 }
 
 pub fn parse_game_queue(content: &str) -> QueueLoad<GameJob> {
-        let mut load = QueueLoad::default();
+    let mut load = QueueLoad::default();
     for (index, raw) in content.lines().enumerate() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
@@ -255,7 +263,9 @@ mod tests {
 
     #[test]
     fn rejects_non_numeric_appids() {
-        assert!(GameJob::decode("lin64|abc|public|").unwrap_err().contains("AppID"));
+        assert!(GameJob::decode("lin64|abc|public|")
+            .unwrap_err()
+            .contains("AppID"));
         assert!(WorkshopJob::decode("730|notanid").is_err());
     }
 
@@ -271,8 +281,14 @@ mod tests {
     #[test]
     fn missing_files_load_as_empty_queues() {
         let dir = crate::test_support::temp_dir("queue-missing");
-        assert!(load_game_queue(dir.join("absent.sspq")).unwrap().jobs.is_empty());
-        assert!(load_workshop_queue(dir.join("absent.sswq")).unwrap().jobs.is_empty());
+        assert!(load_game_queue(dir.join("absent.sspq"))
+            .unwrap()
+            .jobs
+            .is_empty());
+        assert!(load_workshop_queue(dir.join("absent.sswq"))
+            .unwrap()
+            .jobs
+            .is_empty());
     }
 
     #[test]

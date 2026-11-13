@@ -43,10 +43,7 @@ fn doctor(cli: &Cli) -> Result<ExitCode, String> {
     let steamcmd = downloader::steamcmd::SteamCmd::from_settings(&settings).check();
     let depotdownloader =
         downloader::depotdownloader::DepotDownloader::from_settings(&settings).check();
-    for (label, status) in [
-        ("SteamCMD", steamcmd),
-        ("DepotDownloader", depotdownloader),
-    ] {
+    for (label, status) in [("SteamCMD", steamcmd), ("DepotDownloader", depotdownloader)] {
         match status.path {
             Some(path) => println!("{label:<14}: {}", path.display()),
             None => println!("{label:<14}: absent"),
@@ -126,7 +123,11 @@ fn info(cli: &Cli, args: &InfoArgs) -> Result<ExitCode, String> {
         println!(
             "  {} - {} [Manifest {}]",
             depot.depot_id,
-            if depot.name.is_empty() { "DepotName" } else { &depot.name },
+            if depot.name.is_empty() {
+                "DepotName"
+            } else {
+                &depot.name
+            },
             depot.manifest_id
         );
     }
@@ -239,10 +240,7 @@ fn queue(cli: &Cli, action: &QueueAction) -> Result<ExitCode, String> {
                 eprintln!("avertissement : {warning}");
             }
         }
-        QueueAction::Export {
-            destination,
-            file,
-        } => {
+        QueueAction::Export { destination, file } => {
             let path = game_queue_file(cli, file);
             let load = load_game_queue(&path)?;
             save_game_queue(destination, &load.jobs)?;
@@ -252,7 +250,10 @@ fn queue(cli: &Cli, action: &QueueAction) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn resolve_compressor(value: &Option<String>, no_compress: bool) -> Result<(Compressor, bool), String> {
+fn resolve_compressor(
+    value: &Option<String>,
+    no_compress: bool,
+) -> Result<(Compressor, bool), String> {
     if no_compress {
         return Ok((Compressor::SevenZip, true));
     }
@@ -311,7 +312,12 @@ fn pack(cli: &Cli, args: &PackArgs) -> Result<ExitCode, String> {
                 if let Some(output) = &outcome.output {
                     println!("{}", output.display());
                 }
-                println!("{} — {:?} en {:.1}s", outcome.stem, outcome.status, outcome.duration.as_secs_f32());
+                println!(
+                    "{} — {:?} en {:.1}s",
+                    outcome.stem,
+                    outcome.status,
+                    outcome.duration.as_secs_f32()
+                );
             }
             PackStatus::Failed(message) => {
                 failed += 1;
@@ -356,12 +362,7 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
                 println!("File vide ({})", path.display());
             }
             for (index, job) in load.jobs.iter().enumerate() {
-                println!(
-                    "{:>3}. {:>8} / {}",
-                    index + 1,
-                    job.appid,
-                    job.workshop_id
-                );
+                println!("{:>3}. {:>8} / {}", index + 1, job.appid, job.workshop_id);
             }
             for warning in load.warnings {
                 eprintln!("avertissement : {warning}");
@@ -381,10 +382,7 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
             save_workshop_queue(&path, &load.jobs)?;
             println!("{added} item(s) importé(s).");
         }
-        WorkshopAction::Export {
-            destination,
-            file,
-        } => {
+        WorkshopAction::Export { destination, file } => {
             let path = workshop_queue_file(cli, file);
             let load = load_workshop_queue(&path)?;
             save_workshop_queue(destination, &load.jobs)?;
@@ -427,7 +425,10 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
                 let packer = WorkshopPacker::new(options.clone());
                 let outcome = packer.run(job, sink.clone());
                 println!("{outcome}");
-                if matches!(outcome.status, PackStatus::Failed(_) | PackStatus::Cancelled) {
+                if matches!(
+                    outcome.status,
+                    PackStatus::Failed(_) | PackStatus::Cancelled
+                ) {
                     failed += 1;
                 }
             }
@@ -470,7 +471,10 @@ fn depots(cli: &Cli, action: &DepotsAction) -> Result<ExitCode, String> {
             for (depot_id, name) in names.entries() {
                 let matches = needle
                     .as_deref()
-                    .map(|needle| name.to_lowercase().contains(needle) || depot_id.to_string().contains(needle))
+                    .map(|needle| {
+                        name.to_lowercase().contains(needle)
+                            || depot_id.to_string().contains(needle)
+                    })
                     .unwrap_or(true);
                 if matches {
                     println!("{depot_id} = {name}");
@@ -492,9 +496,11 @@ fn template_command(cli: &Cli, action: &TemplateAction) -> Result<ExitCode, Stri
             )
             .map_err(|error| format!("JSON du job : {error}"))?;
             let template = std::fs::read_to_string(template).map_err(|error| error.to_string())?;
-            print!("{}", steam_press_core::template::render_custom(&template, &data));
+            print!(
+                "{}",
+                steam_press_core::template::render_custom(&template, &data)
+            );
         }
     }
     Ok(ExitCode::SUCCESS)
 }
-

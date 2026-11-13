@@ -250,7 +250,10 @@ pub fn parse(input: &str) -> Result<Value, String> {
             break;
         }
         if parser.peek() == Some(b'}') {
-            return Err(format!("accolade fermante inattendue à l'octet {}", parser.position));
+            return Err(format!(
+                "accolade fermante inattendue à l'octet {}",
+                parser.position
+            ));
         }
         let key = parser.parse_token()?;
         let value = parser.parse_value()?;

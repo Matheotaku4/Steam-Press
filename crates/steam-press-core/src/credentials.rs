@@ -44,8 +44,8 @@ fn decode_key(key_base64: &str) -> Result<[u8; KEY_LEN], String> {
 
 pub fn encrypt(plaintext: &str, key_base64: &str) -> Result<String, String> {
     let key = decode_key(key_base64)?;
-    let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|_| "initialisation du chiffrement impossible".to_string())?;
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|_| "initialisation du chiffrement impossible".to_string())?;
 
     let mut nonce_bytes = [0u8; NONCE_LEN];
     OsRng.fill_bytes(&mut nonce_bytes);
@@ -70,8 +70,8 @@ pub fn decrypt(encoded: &str, key_base64: &str) -> Result<String, String> {
     }
 
     let (nonce_bytes, ciphertext) = payload.split_at(NONCE_LEN);
-    let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|_| "initialisation du déchiffrement impossible".to_string())?;
+    let cipher = Aes256Gcm::new_from_slice(&key)
+        .map_err(|_| "initialisation du déchiffrement impossible".to_string())?;
     let plaintext = cipher
         .decrypt(Nonce::from_slice(nonce_bytes), ciphertext)
         .map_err(|_| "identifiants illisibles : mauvaise clé ou fichier corrompu".to_string())?;

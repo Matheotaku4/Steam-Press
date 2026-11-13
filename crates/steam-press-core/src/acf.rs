@@ -151,10 +151,7 @@ fn app_state(job: &AcfJob, appid: &str, name: &str, install_dir: &str) -> Value 
         text("AutoUpdateBehavior", "0"),
         text("AllowOtherDownloadsWhileRunning", "0"),
         text("ScheduledAutoUpdate", "0"),
-        (
-            "InstalledDepots".to_string(),
-            Value::Object(installed),
-        ),
+        ("InstalledDepots".to_string(), Value::Object(installed)),
     ];
 
     if !job.shared_depots.is_empty() {
@@ -240,10 +237,7 @@ pub fn write_shared_acf(directory: &Path, job: &AcfJob) -> Result<Option<PathBuf
     entries.push(("UserConfig".to_string(), Value::Object(Vec::new())));
     entries.push(("MountedConfig".to_string(), Value::Object(Vec::new())));
 
-    let root = Value::Object(vec![(
-        "AppState".to_string(),
-        Value::Object(entries),
-    )]);
+    let root = Value::Object(vec![("AppState".to_string(), Value::Object(entries))]);
     fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     let path = directory.join("appmanifest_228980.acf");
     fs::write(&path, root.to_vdf_string()).map_err(|error| error.to_string())?;
@@ -267,7 +261,11 @@ mod tests {
     fn rewrites_privacy_fields_idempotently() {
         let dir = crate::test_support::temp_dir("acf");
         let path = dir.join("appmanifest_2379780.acf");
-        fs::write(&path, include_str!("../tests/fixtures/appmanifest_2379780.acf")).unwrap();
+        fs::write(
+            &path,
+            include_str!("../tests/fixtures/appmanifest_2379780.acf"),
+        )
+        .unwrap();
         assert!(rewrite_privacy_fields(&path).unwrap());
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"LastOwner\"\t\t\"0\""));

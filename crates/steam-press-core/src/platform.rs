@@ -2,24 +2,19 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Platform {
     #[serde(rename = "win64")]
     Win64,
     #[serde(rename = "win32")]
     Win32,
+    #[default]
     #[serde(rename = "lin64")]
     Linux64,
     #[serde(rename = "lin32")]
     Linux32,
     #[serde(rename = "macos")]
     Mac,
-}
-
-impl Default for Platform {
-    fn default() -> Self {
-        Self::Linux64
-    }
 }
 
 impl Platform {

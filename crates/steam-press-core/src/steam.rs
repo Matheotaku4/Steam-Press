@@ -169,7 +169,11 @@ pub fn parse_store_info(appid: &str, json: &str) -> Result<StoreInfo, String> {
         .get("data")
         .ok_or_else(|| format!("fiche store vide pour {appid}"))?;
     Ok(StoreInfo {
-        name: data.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
+        name: data
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
         short_description: data
             .get("short_description")
             .and_then(Value::as_str)
@@ -227,14 +231,20 @@ mod tests {
         let json = include_str!("../tests/fixtures/store.json");
         let store = parse_store_info("2379780", json).unwrap();
         assert_eq!(store.name, "Balatro");
-        assert_eq!(store.website.as_deref(), Some("https://www.playbalatro.com"));
+        assert_eq!(
+            store.website.as_deref(),
+            Some("https://www.playbalatro.com")
+        );
         assert!(store.short_description.starts_with("The poker"));
     }
 
     #[test]
     fn normalize_https_only_rewrites_the_scheme() {
         assert_eq!(normalize_https("http://example.com"), "https://example.com");
-        assert_eq!(normalize_https("https://example.com"), "https://example.com");
+        assert_eq!(
+            normalize_https("https://example.com"),
+            "https://example.com"
+        );
         assert_eq!(
             normalize_https("https://example.com/http-guide"),
             "https://example.com/http-guide"

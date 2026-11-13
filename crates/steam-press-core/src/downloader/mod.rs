@@ -13,17 +13,12 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloaderKind {
+    #[default]
     SteamCmd,
     DepotDownloader,
-}
-
-impl Default for DownloaderKind {
-    fn default() -> Self {
-        Self::SteamCmd
-    }
 }
 
 impl DownloaderKind {
@@ -88,11 +83,7 @@ pub struct DownloadRequest {
 }
 
 impl DownloadRequest {
-    pub fn for_job(
-        job: GameJob,
-        credentials: Credentials,
-        work_dir: impl Into<PathBuf>,
-    ) -> Self {
+    pub fn for_job(job: GameJob, credentials: Credentials, work_dir: impl Into<PathBuf>) -> Self {
         let branch_password = if job.branch_password.trim().is_empty() {
             None
         } else {
@@ -163,7 +154,9 @@ impl fmt::Display for DownloadError {
             Self::InvalidCredentials => {
                 formatter.write_str("identifiants Steam invalides ou Steam Guard requis")
             }
-            Self::RateLimited => formatter.write_str("Steam limite temporairement les téléchargements"),
+            Self::RateLimited => {
+                formatter.write_str("Steam limite temporairement les téléchargements")
+            }
             Self::NoSubscription => formatter.write_str("ce compte ne possède pas ce jeu"),
             Self::SteamGuardRequired => {
                 formatter.write_str("Steam Guard doit être validé avant de continuer")
@@ -217,7 +210,10 @@ mod tests {
 
     #[test]
     fn downloader_kind_settings_round_trip() {
-        assert_eq!(DownloaderKind::from_setting("steamcmd"), Some(DownloaderKind::SteamCmd));
+        assert_eq!(
+            DownloaderKind::from_setting("steamcmd"),
+            Some(DownloaderKind::SteamCmd)
+        );
         assert_eq!(
             DownloaderKind::from_setting("DepotDownloader"),
             Some(DownloaderKind::DepotDownloader)

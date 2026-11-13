@@ -117,7 +117,11 @@ impl Downloader for SteamCmd {
         let manifest = steamapps.join(format!("appmanifest_{}.acf", request.appid));
         Ok(DownloadReport {
             content_dir: steamapps,
-            app_manifest: if manifest.is_file() { Some(manifest) } else { None },
+            app_manifest: if manifest.is_file() {
+                Some(manifest)
+            } else {
+                None
+            },
             depots: Vec::new(),
             build_id: String::new(),
         })
@@ -162,7 +166,11 @@ impl Downloader for SteamCmd {
             .join(&request.appid)
             .join(&request.workshop_id);
         Ok(WorkshopReport {
-            content_dir: if content.is_dir() { content } else { request.work_dir.clone() },
+            content_dir: if content.is_dir() {
+                content
+            } else {
+                request.work_dir.clone()
+            },
         })
     }
 
@@ -281,8 +289,9 @@ mod tests {
             },
             "/tmp/dl",
         );
-        assert!(build_script(&request)
-            .contains("app_update 123 -beta beta -betapassword pw2 validate"));
+        assert!(
+            build_script(&request).contains("app_update 123 -beta beta -betapassword pw2 validate")
+        );
     }
 
     #[test]
@@ -316,6 +325,9 @@ mod tests {
             classify_run(0, "", "Invalid Password", true, true),
             Err(DownloadError::InvalidCredentials)
         );
-        assert_eq!(classify_run(0, "Success! App '2379780' fully installed.", "", true, true), Ok(()));
+        assert_eq!(
+            classify_run(0, "Success! App '2379780' fully installed.", "", true, true),
+            Ok(())
+        );
     }
 }

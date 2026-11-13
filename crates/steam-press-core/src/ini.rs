@@ -28,13 +28,19 @@ impl Ini {
             if let Some(rest) = line.strip_prefix('[') {
                 if let Some(name) = rest.strip_suffix(']') {
                     let name = name.trim().to_string();
-                    current = Some(match ini.sections.iter().position(|(n, _)| n.eq_ignore_ascii_case(&name)) {
-                        Some(index) => index,
-                        None => {
-                            ini.sections.push((name, Vec::new()));
-                            ini.sections.len() - 1
-                        }
-                    });
+                    current = Some(
+                        match ini
+                            .sections
+                            .iter()
+                            .position(|(n, _)| n.eq_ignore_ascii_case(&name))
+                        {
+                            Some(index) => index,
+                            None => {
+                                ini.sections.push((name, Vec::new()));
+                                ini.sections.len() - 1
+                            }
+                        },
+                    );
                     continue;
                 }
             }
@@ -50,7 +56,10 @@ impl Ini {
 
             if let Some(index) = current {
                 let entries = &mut ini.sections[index].1;
-                match entries.iter_mut().find(|(existing, _)| existing.eq_ignore_ascii_case(key)) {
+                match entries
+                    .iter_mut()
+                    .find(|(existing, _)| existing.eq_ignore_ascii_case(key))
+                {
                     Some(entry) => entry.1 = value.to_string(),
                     None => entries.push((key.to_string(), value.to_string())),
                 }
@@ -75,7 +84,10 @@ impl Ini {
     }
 
     pub fn get(&self, section: &str, key: &str) -> Option<&str> {
-        let (_, entries) = self.sections.iter().find(|(name, _)| name.eq_ignore_ascii_case(section))?;
+        let (_, entries) = self
+            .sections
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(section))?;
         entries
             .iter()
             .find(|(existing, _)| existing.eq_ignore_ascii_case(key))
@@ -83,7 +95,11 @@ impl Ini {
     }
 
     pub fn set(&mut self, section: &str, key: &str, value: &str) {
-        let index = match self.sections.iter().position(|(name, _)| name.eq_ignore_ascii_case(section)) {
+        let index = match self
+            .sections
+            .iter()
+            .position(|(name, _)| name.eq_ignore_ascii_case(section))
+        {
             Some(index) => index,
             None => {
                 self.sections.push((section.to_string(), Vec::new()));
@@ -91,7 +107,10 @@ impl Ini {
             }
         };
         let entries = &mut self.sections[index].1;
-        match entries.iter_mut().find(|(existing, _)| existing.eq_ignore_ascii_case(key)) {
+        match entries
+            .iter_mut()
+            .find(|(existing, _)| existing.eq_ignore_ascii_case(key))
+        {
             Some(entry) => entry.1 = value.to_string(),
             None => entries.push((key.to_string(), value.to_string())),
         }

@@ -183,9 +183,17 @@ impl Settings {
         if let Some(options) = &self.custom_compress_options {
             ini.set("SSP", "customcompressoption", options.trim());
         }
-        ini.set("SSP", "skipcompression", if self.skip_compression { "1" } else { "0" });
+        ini.set(
+            "SSP",
+            "skipcompression",
+            if self.skip_compression { "1" } else { "0" },
+        );
         ini.set("SSP", "darkmode", if self.dark_mode { "1" } else { "0" });
-        ini.set("SSP", "uploadcrewmode", if self.upload_crew_mode { "1" } else { "0" });
+        ini.set(
+            "SSP",
+            "uploadcrewmode",
+            if self.upload_crew_mode { "1" } else { "0" },
+        );
         ini.set("SSP", "rinruusername", self.uploader.trim());
         ini.set("SSP", "filehost", self.filehost.trim());
         ini.set("SSP", "compresspassword", self.archive_password());
@@ -246,12 +254,14 @@ mod tests {
     fn settings_round_trip_and_defaults() {
         let dir = crate::test_support::temp_dir("settings");
         let paths = Paths::under(&dir);
-        let mut settings = Settings::default();
-        settings.compressor = Compressor::Rar;
-        settings.skip_compression = true;
-        settings.uploader = "alice".into();
-        settings.filehost = "filehost.example".into();
-        settings.custom_compress_options = Some("-mx5".into());
+        let mut settings = Settings {
+            compressor: Compressor::Rar,
+            skip_compression: true,
+            uploader: "alice".into(),
+            filehost: "filehost.example".into(),
+            custom_compress_options: Some("-mx5".into()),
+            ..Default::default()
+        };
         settings.ensure_key();
         settings.save(&paths).unwrap();
 
@@ -279,8 +289,10 @@ mod tests {
 
     #[test]
     fn blank_password_uses_community_default() {
-        let mut settings = Settings::default();
-        settings.compress_password = "   ".into();
+        let settings = Settings {
+            compress_password: "   ".into(),
+            ..Default::default()
+        };
         assert_eq!(settings.archive_password(), "cs.rin.ru");
     }
 }

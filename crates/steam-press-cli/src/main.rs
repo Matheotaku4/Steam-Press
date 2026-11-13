@@ -224,7 +224,9 @@ pub enum WorkshopAction {
 #[derive(Debug, Subcommand)]
 pub enum DepotsAction {
     Sync,
-    Lookup { depot_id: String },
+    Lookup {
+        depot_id: String,
+    },
     List {
         #[arg(long)]
         search: Option<String>,

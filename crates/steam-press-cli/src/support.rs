@@ -21,7 +21,9 @@ pub fn paths(cli: &Cli) -> Paths {
 
 pub fn load_settings(cli: &Cli) -> Result<(Paths, Settings), String> {
     let paths = paths(cli);
-    paths.ensure().map_err(|error| format!("répertoires : {error}"))?;
+    paths
+        .ensure()
+        .map_err(|error| format!("répertoires : {error}"))?;
     let mut settings = Settings::load(&paths);
     if let Some(output) = &cli.output {
         settings.output_dir = Some(output.clone());
@@ -58,7 +60,10 @@ pub fn credentials(
             username: saved.username,
             password: saved.password,
         }),
-        None => Err("aucun identifiant enregistré : lancez « steam-press login » ou utilisez --anonymous".to_string()),
+        None => Err(
+            "aucun identifiant enregistré : lancez « steam-press login » ou utilisez --anonymous"
+                .to_string(),
+        ),
     }
 }
 
