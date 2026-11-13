@@ -1,0 +1,16 @@
+[package]
+name = "steam-press-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Core logic for Steam Press: Steam depot packing, manifests and release templates"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+chrono = { version = "0.4", features = ["serde"] }
+aes-gcm = "0.10"
+base64 = "0.22"
+rand = "0.8"
+zip = { version = "2", default-features = false, features = ["deflate"] }
