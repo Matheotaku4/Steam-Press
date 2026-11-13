@@ -1,0 +1,42 @@
+{
+  "status": "success",
+  "data": {
+    "2379780": {
+      "appid": "2379780",
+      "common": {
+        "name": "Balatro",
+        "type": "Game"
+      },
+      "config": {
+        "installdir": "Balatro"
+      },
+      "depots": {
+        "branches": {
+          "public": {
+            "buildid": "18674832",
+            "timeupdated": 1740441718,
+            "description": "public"
+          }
+        },
+        "228989": {
+          "name": "Steamworks Common Redistributables",
+          "manifests": {
+            "public": {
+              "gid": "7206221393165260579",
+              "size": "1024"
+            }
+          }
+        },
+        "2379781": {
+          "name": "Balatro",
+          "manifests": {
+            "public": {
+              "gid": "4851806656204679952",
+              "size": "1024"
+            }
+          }
+        }
+      }
+    }
+  }
+}
