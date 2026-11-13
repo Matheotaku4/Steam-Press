@@ -28,6 +28,9 @@ pub struct Cli {
     /// Print downloader and compressor output.
     #[arg(short, long, global = true)]
     pub verbose: bool,
+    /// Print a machine-readable JSON document.
+    #[arg(long, global = true)]
+    pub json: bool,
     #[command(subcommand)]
     pub command: Command,
 }
@@ -49,6 +52,10 @@ pub enum Command {
     },
     /// Download and pack games.
     Pack(PackArgs),
+    /// Generate manifests and an archive from a local installation.
+    Import(ImportArgs),
+    /// Compare two builds and create an update archive.
+    Diff(DiffArgs),
     /// Download and pack workshop items.
     Workshop {
         #[command(subcommand)]
@@ -116,18 +123,12 @@ pub struct InfoArgs {
     pub appid: String,
     #[arg(long, default_value = "public")]
     pub branch: String,
-    /// Print a machine-readable JSON document.
-    #[arg(long)]
-    pub json: bool,
 }
 
 #[derive(Debug, clap::Args)]
 pub struct SearchArgs {
     /// Game name to search for.
     pub term: String,
-    /// Print a machine-readable JSON array.
-    #[arg(long)]
-    pub json: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -195,8 +196,50 @@ pub struct PackArgs {
     pub no_compress: bool,
     #[arg(long)]
     pub dry_run: bool,
+    /// Delete any previous work directory instead of resuming it.
+    #[arg(long)]
+    pub fresh: bool,
     #[arg(long)]
     pub anonymous: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct ImportArgs {
+    /// Directory containing the installed game files.
+    pub path: PathBuf,
+    #[arg(long)]
+    pub appid: String,
+    #[arg(long, default_value = "public")]
+    pub branch: String,
+    #[arg(long, value_enum, default_value = "lin64")]
+    pub os: OsArg,
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long)]
+    pub install_dir: Option<String>,
+    #[arg(long)]
+    pub compressor: Option<String>,
+    #[arg(long)]
+    pub no_compress: bool,
+    #[arg(long)]
+    pub fresh: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct DiffArgs {
+    /// Directory containing the old build.
+    pub old: PathBuf,
+    /// Directory containing the new build.
+    pub new: PathBuf,
+    /// Also create an archive containing added and modified files.
+    #[arg(long)]
+    pub archive: bool,
+    #[arg(long)]
+    pub stem: Option<String>,
+    #[arg(long)]
+    pub compressor: Option<String>,
+    #[arg(long)]
+    pub no_compress: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -258,10 +301,15 @@ pub enum TemplateAction {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    let json = cli.json;
     match commands::dispatch(cli) {
         Ok(code) => code,
         Err(message) => {
-            eprintln!("steam-press : {message}");
+            if json {
+                println!("{}", serde_json::json!({"ok": false, "error": message}));
+            } else {
+                eprintln!("steam-press : {message}");
+            }
             ExitCode::from(1)
         }
     }
@@ -283,10 +331,10 @@ mod tests {
     fn search_takes_a_game_name() {
         let matches =
             Cli::try_parse_from(["steam-press", "search", "half-life", "--json"]).unwrap();
+        assert!(matches.json);
         match matches.command {
             Command::Search(args) => {
                 assert_eq!(args.term, "half-life");
-                assert!(args.json);
             }
             _ => panic!("expected search"),
         }

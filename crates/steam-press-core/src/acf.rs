@@ -177,15 +177,100 @@ pub fn generate_acf(job: &AcfJob) -> String {
     Value::Object(vec![("AppState".to_string(), state)]).to_vdf_string()
 }
 
+/// Validates the fields Steam needs in a generated or downloaded manifest.
+pub fn validate_manifest(path: &Path) -> Result<AppManifest, String> {
+    let manifest = read_manifest(path)?;
+    let appid = manifest
+        .appid
+        .as_deref()
+        .filter(|appid| !appid.is_empty() && appid.chars().all(|c| c.is_ascii_digit()))
+        .ok_or_else(|| format!("{}: invalid or missing appid", path.display()))?;
+    if manifest.name.trim().is_empty() {
+        return Err(format!("{}: missing game name", path.display()));
+    }
+    if manifest.build_id.trim().is_empty() {
+        return Err(format!("{}: missing buildid", path.display()));
+    }
+    if manifest
+        .installdir
+        .as_deref()
+        .map(str::trim)
+        .filter(|dir| !dir.is_empty())
+        .is_none()
+    {
+        return Err(format!("{}: missing installdir", path.display()));
+    }
+    if manifest.installed_depots.is_empty() {
+        return Err(format!("{}: no installed depots", path.display()));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for depot in &manifest.installed_depots {
+        if !seen.insert(depot.depot_id.clone()) {
+            return Err(format!(
+                "{}: duplicate depot {}",
+                path.display(),
+                depot.depot_id
+            ));
+        }
+        if !depot.depot_id.chars().all(|c| c.is_ascii_digit())
+            || depot.manifest.trim().is_empty()
+            || !depot.manifest.chars().all(|c| c.is_ascii_digit())
+        {
+            return Err(format!(
+                "{}: invalid depot or manifest ID for {}",
+                path.display(),
+                depot.depot_id
+            ));
+        }
+        if depot.size.is_none() {
+            return Err(format!(
+                "{}: missing size for depot {}",
+                path.display(),
+                depot.depot_id
+            ));
+        }
+    }
+    if appid == "228980" && manifest.installed_depots.is_empty() {
+        return Err(format!(
+            "{}: shared depot manifest is empty",
+            path.display()
+        ));
+    }
+    Ok(manifest)
+}
+
+fn validate_job(job: &AcfJob) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    for depot in &job.depots {
+        if !seen.insert(depot.depot_id.clone()) {
+            return Err(format!("duplicate depot {}", depot.depot_id));
+        }
+        if depot.depot_id.trim().is_empty()
+            || !depot.depot_id.chars().all(|c| c.is_ascii_digit())
+            || depot.manifest_id.trim().is_empty()
+            || !depot.manifest_id.chars().all(|c| c.is_ascii_digit())
+        {
+            return Err(format!("invalid depot {}", depot.depot_id));
+        }
+    }
+    if job.appid.trim().is_empty() || !job.appid.chars().all(|c| c.is_ascii_digit()) {
+        return Err("invalid appid".to_string());
+    }
+    Ok(())
+}
+
 pub fn write_acf(directory: &Path, job: &AcfJob) -> Result<PathBuf, String> {
+    validate_job(job)?;
     fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     let path = directory.join(format!("appmanifest_{}.acf", job.appid));
     fs::write(&path, generate_acf(job)).map_err(|error| error.to_string())?;
+    validate_manifest(&path)?;
     Ok(path)
 }
 
 /// Writes `appmanifest_228980.acf` for Steamworks redistributables.
 pub fn write_shared_acf(directory: &Path, job: &AcfJob) -> Result<Option<PathBuf>, String> {
+    validate_job(job)?;
     if job.shared_depots.is_empty() {
         return Ok(None);
     }
@@ -241,6 +326,7 @@ pub fn write_shared_acf(directory: &Path, job: &AcfJob) -> Result<Option<PathBuf
     fs::create_dir_all(directory).map_err(|error| error.to_string())?;
     let path = directory.join("appmanifest_228980.acf");
     fs::write(&path, root.to_vdf_string()).map_err(|error| error.to_string())?;
+    validate_manifest(&path)?;
     Ok(Some(path))
 }
 
@@ -271,6 +357,64 @@ mod tests {
         assert!(text.contains("\"LastOwner\"\t\t\"0\""));
         assert!(text.contains("\"LauncherPath\"\t\t\"0\""));
         assert!(!rewrite_privacy_fields(&path).unwrap());
+    }
+
+    #[test]
+    fn rejects_invalid_and_duplicate_depots() {
+        let dir = crate::test_support::temp_dir("acf-invalid");
+        let job = AcfJob {
+            appid: "42".into(),
+            name: "Game".into(),
+            install_dir: "Game".into(),
+            build_id: "7".into(),
+            size_on_disk: 1,
+            depots: vec![
+                AcfDepot {
+                    depot_id: "10".into(),
+                    manifest_id: "11".into(),
+                    size: 1,
+                    dlc_appid: None,
+                },
+                AcfDepot {
+                    depot_id: "10".into(),
+                    manifest_id: "12".into(),
+                    size: 1,
+                    dlc_appid: None,
+                },
+            ],
+            shared_depots: vec![],
+            install_scripts: vec![],
+        };
+        assert!(write_acf(&dir, &job).unwrap_err().contains("duplicate"));
+    }
+
+    #[test]
+    fn writes_a_valid_shared_manifest() {
+        let dir = crate::test_support::temp_dir("acf-shared");
+        let job = AcfJob {
+            appid: "42".into(),
+            name: "Game".into(),
+            install_dir: "Game".into(),
+            build_id: "7".into(),
+            size_on_disk: 1,
+            depots: vec![AcfDepot {
+                depot_id: "10".into(),
+                manifest_id: "11".into(),
+                size: 1,
+                dlc_appid: None,
+            }],
+            shared_depots: vec![SharedDepot {
+                depot_id: "100".into(),
+                owner_appid: "228980".into(),
+                manifest_id: "22".into(),
+                size: 2,
+            }],
+            install_scripts: vec![],
+        };
+        let path = write_shared_acf(&dir, &job).unwrap().unwrap();
+        let manifest = validate_manifest(&path).unwrap();
+        assert_eq!(manifest.appid.as_deref(), Some("228980"));
+        assert_eq!(manifest.installed_depots[0].depot_id, "100");
     }
 
     #[test]

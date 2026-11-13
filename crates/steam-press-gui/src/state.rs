@@ -1,5 +1,8 @@
 //! Testable view state for the desktop application.
 
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use steam_press_core::events::PackEvent;
 use steam_press_core::queue::{GameJob, WorkshopJob};
 
@@ -163,6 +166,74 @@ impl<T: PartialEq + Clone> JobQueue<T> {
 pub type GameQueue = JobQueue<GameJob>;
 pub type WorkshopQueue = JobQueue<WorkshopJob>;
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryEntry {
+    pub game: Option<GameJob>,
+    pub workshop: Option<WorkshopJob>,
+    pub status: String,
+    pub outcome: String,
+    pub output: Option<PathBuf>,
+    pub finished_at: u64,
+    #[serde(default)]
+    pub log: Vec<String>,
+}
+
+impl HistoryEntry {
+    pub fn label(&self) -> String {
+        if let Some(game) = &self.game {
+            format!("{} · {}", game.appid, game.platform.label())
+        } else if let Some(workshop) = &self.workshop {
+            format!("{}/{}", workshop.appid, workshop.workshop_id)
+        } else {
+            "Unknown job".to_string()
+        }
+    }
+
+    pub fn is_failed(&self) -> bool {
+        self.status == "failed"
+    }
+
+    pub fn new(
+        game: Option<GameJob>,
+        workshop: Option<WorkshopJob>,
+        status: impl Into<String>,
+        outcome: impl Into<String>,
+        output: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            game,
+            workshop,
+            status: status.into(),
+            outcome: outcome.into(),
+            output,
+            finished_at: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0),
+            log: Vec::new(),
+        }
+    }
+}
+
+pub fn load_history(path: impl AsRef<Path>) -> Vec<HistoryEntry> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+pub fn save_history(path: impl AsRef<Path>, history: &[HistoryEntry]) -> Result<(), String> {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+    }
+    let text = serde_json::to_string_pretty(history).map_err(|error| error.to_string())?;
+    std::fs::write(path, text).map_err(|error| error.to_string())
+}
+
 #[derive(Debug, Clone)]
 pub enum WorkerEvent {
     Event(PackEvent),
@@ -206,6 +277,33 @@ mod tests {
         state.cancel_unfinished();
         assert_eq!(state.entries()[0].status, EntryStatus::Done);
         assert_eq!(state.entries()[1].status, EntryStatus::Cancelled);
+    }
+
+    #[test]
+    fn history_round_trips_and_keeps_recent_entries() {
+        let dir = steam_press_core::test_support::temp_dir("history");
+        let path = dir.join("history.json");
+        let entries = vec![
+            HistoryEntry::new(
+                Some(GameJob::new(steam_press_core::Platform::Linux64, "10")),
+                None,
+                "completed",
+                "ok",
+                Some(dir.join("out.7z")),
+            ),
+            HistoryEntry::new(
+                None,
+                Some(WorkshopJob::new("730", "1")),
+                "failed",
+                "broken",
+                None,
+            ),
+        ];
+        save_history(&path, &entries).unwrap();
+        let loaded = load_history(&path);
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].label(), "10 · Linux x64");
+        assert!(loaded[1].is_failed());
     }
 
     #[test]

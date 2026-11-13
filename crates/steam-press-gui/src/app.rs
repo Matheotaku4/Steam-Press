@@ -1,6 +1,9 @@
 //! Modern egui desktop interface for Steam Press.
 
-use crate::state::{EntryStatus, GameQueue, LogEntry, LogLevel, WorkerEvent, WorkshopQueue};
+use crate::state::{
+    load_history, save_history, EntryStatus, GameQueue, HistoryEntry, LogEntry, LogLevel,
+    WorkerEvent, WorkshopQueue,
+};
 use crate::updater::{self, AvailableUpdate};
 use eframe::egui;
 use std::path::PathBuf;
@@ -59,6 +62,7 @@ mod icons {
 enum Tab {
     Library,
     Workshop,
+    History,
     Depots,
     Settings,
 }
@@ -221,6 +225,8 @@ pub struct SteamPressApp {
     tab: Tab,
     game_queue: GameQueue,
     workshop_queue: WorkshopQueue,
+    history: Vec<HistoryEntry>,
+    history_path: PathBuf,
     game_form: GameForm,
     workshop_form: WorkshopForm,
     login: LoginForm,
@@ -306,6 +312,8 @@ impl SteamPressApp {
         let custom_options_text = settings.custom_compress_options.clone().unwrap_or_default();
         let queue_file = paths.config_dir.join("queue.sspq");
         let workshop_file = paths.config_dir.join("queue.sswq");
+        let history_path = paths.config_dir.join("history.json");
+        let history = load_history(&history_path);
         let mut game_queue = GameQueue::default();
         if let Ok(load) = steam_press_core::queue::load_game_queue(&queue_file) {
             for job in load.jobs {
@@ -328,6 +336,8 @@ impl SteamPressApp {
             tab: Tab::Library,
             game_queue,
             workshop_queue,
+            history,
+            history_path,
             game_form: GameForm::default(),
             workshop_form: WorkshopForm::default(),
             login,
@@ -544,6 +554,7 @@ impl SteamPressApp {
             paths: self.paths.clone(),
             downloader_kind: self.downloader_kind,
             dry_run: false,
+            fresh: false,
             credentials: self.current_credentials()?,
             depot_names: self.depot_names.clone(),
         })
@@ -769,6 +780,25 @@ impl SteamPressApp {
                     FinishStatus::Cancelled => LogLevel::Warning,
                     FinishStatus::Failed => LogLevel::Error,
                 };
+                let game = self
+                    .game_queue
+                    .entries()
+                    .iter()
+                    .find(|entry| entry.job.encode() == job)
+                    .map(|entry| entry.job.clone());
+                let workshop = self
+                    .workshop_queue
+                    .entries()
+                    .iter()
+                    .find(|entry| workshop_stem(&entry.job) == job)
+                    .map(|entry| entry.job.clone());
+                let status_key = match status {
+                    FinishStatus::Completed => "completed",
+                    FinishStatus::Skipped => "skipped",
+                    FinishStatus::Cancelled => "cancelled",
+                    FinishStatus::Failed => "failed",
+                };
+                self.record_history(game, workshop, status_key, &outcome, output.clone());
                 let text = match (status, output) {
                     (FinishStatus::Failed, _) => format!("Failed: {outcome}"),
                     (_, Some(path)) => format!("{} - {}", status.label(), path.display()),
@@ -779,6 +809,32 @@ impl SteamPressApp {
                     self.error = Some(outcome);
                 }
             }
+        }
+    }
+
+    fn record_history(
+        &mut self,
+        game: Option<GameJob>,
+        workshop: Option<WorkshopJob>,
+        status: &str,
+        outcome: &str,
+        output: Option<PathBuf>,
+    ) {
+        let mut entry = HistoryEntry::new(game, workshop, status, outcome, output);
+        entry.log = self
+            .log
+            .iter()
+            .rev()
+            .take(80)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|line| format!("[{}] {}", line.level.tag(), line.text))
+            .collect();
+        self.history.insert(0, entry);
+        self.history.truncate(200);
+        if let Err(error) = save_history(&self.history_path, &self.history) {
+            self.push_log(LogLevel::Warning, format!("History save: {error}"));
         }
     }
 
@@ -1045,6 +1101,7 @@ impl SteamPressApp {
                         "Workshop",
                         "Community items",
                     ),
+                    (Tab::History, icons::CLOCK, "History", "Finished jobs"),
                     (Tab::Depots, icons::DEPOTS, "Depots", "Steam metadata"),
                     (
                         Tab::Settings,
@@ -1707,6 +1764,132 @@ impl SteamPressApp {
         action
     }
 
+    fn history_page(&mut self, ui: &mut egui::Ui, palette: &Palette) -> Option<UiAction> {
+        let mut retry_game = None;
+        let mut retry_workshop = None;
+        let mut clear = false;
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(page_title(palette, "History"));
+                ui.label(
+                    egui::RichText::new("Completed, skipped, failed and cancelled jobs.")
+                        .size(12.5)
+                        .color(palette.muted),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if secondary_button(ui, palette, icons::TRASH, "Clear history").clicked() {
+                    clear = true;
+                }
+            });
+        });
+        ui.add_space(18.0);
+
+        if self.history.is_empty() {
+            card(ui, palette, |ui| {
+                empty_state(
+                    ui,
+                    palette,
+                    "No finished jobs yet",
+                    "Run a game or workshop queue and its result will be kept here.",
+                );
+            });
+        } else {
+            let entries = self.history.clone();
+            for entry in entries {
+                let color = if entry.status == "completed" {
+                    palette.success
+                } else if entry.is_failed() {
+                    palette.danger
+                } else {
+                    palette.warning
+                };
+                card(ui, palette, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new(entry.label())
+                                    .size(13.0)
+                                    .strong()
+                                    .color(palette.text),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} - {}",
+                                    entry.status, entry.outcome
+                                ))
+                                .size(11.0)
+                                .color(color),
+                            );
+                            if let Some(output) = &entry.output {
+                                ui.label(
+                                    egui::RichText::new(output.display().to_string())
+                                        .monospace()
+                                        .size(9.5)
+                                        .color(palette.muted),
+                                );
+                            }
+                            if !entry.log.is_empty() {
+                                ui.collapsing(format!("Log ({})", entry.log.len()), |ui| {
+                                    egui::ScrollArea::vertical()
+                                        .max_height(160.0)
+                                        .show(ui, |ui| {
+                                            for line in &entry.log {
+                                                ui.label(
+                                                    egui::RichText::new(line)
+                                                        .monospace()
+                                                        .size(9.5)
+                                                        .color(palette.muted),
+                                                );
+                                            }
+                                        });
+                                });
+                            }
+                        });
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if secondary_button(ui, palette, icons::REFRESH, "Retry").clicked() {
+                                if entry.game.is_some() {
+                                    retry_game = entry.game.clone();
+                                } else {
+                                    retry_workshop = entry.workshop.clone();
+                                }
+                            }
+                            if entry.output.is_some()
+                                && secondary_button(ui, palette, icons::FOLDER, "Open").clicked()
+                            {
+                                if let Some(output) = &entry.output {
+                                    let _ = tooling::open_folder(output);
+                                }
+                            }
+                        });
+                    });
+                });
+                ui.add_space(8.0);
+            }
+        }
+
+        if clear {
+            self.history.clear();
+            let _ = save_history(&self.history_path, &self.history);
+            self.status_message = Some("History cleared.".to_string());
+        }
+        if let Some(job) = retry_game {
+            if self.game_queue.push(job) {
+                self.tab = Tab::Library;
+                self.persist_queues();
+                self.status_message = Some("Job queued again.".to_string());
+            }
+        }
+        if let Some(job) = retry_workshop {
+            if self.workshop_queue.push(job) {
+                self.tab = Tab::Workshop;
+                self.persist_queues();
+                self.status_message = Some("Workshop item queued again.".to_string());
+            }
+        }
+        None
+    }
+
     fn depots_page(&mut self, ui: &mut egui::Ui, palette: &Palette) -> Option<UiAction> {
         let mut action = None;
         ui.horizontal(|ui| {
@@ -2166,6 +2349,7 @@ impl SteamPressApp {
                         action = match self.tab {
                             Tab::Library => self.library_page(ui, &palette),
                             Tab::Workshop => self.workshop_page(ui, &palette),
+                            Tab::History => self.history_page(ui, &palette),
                             Tab::Depots => self.depots_page(ui, &palette),
                             Tab::Settings => self.settings_page(ui, &palette),
                         };
@@ -2651,6 +2835,28 @@ mod tests {
     }
 
     #[test]
+    fn finished_jobs_are_persisted_in_history() {
+        let mut app = test_app("history");
+        let job = GameJob::new(Platform::Linux64, "40");
+        app.game_queue.push(job.clone());
+        let output = app.output_dir().join("game.7z");
+        app.handle_event(PackEvent::Finished {
+            job: job.encode(),
+            status: FinishStatus::Completed,
+            outcome: "Completed".to_string(),
+            output: Some(output),
+        });
+        assert_eq!(app.history.len(), 1);
+        assert_eq!(app.history[0].status, "completed");
+        assert!(app.history_path.is_file());
+        app.tab = Tab::History;
+        let context = egui::Context::default();
+        let _ = context.run(egui::RawInput::default(), |context| {
+            app.draw(context);
+        });
+    }
+
+    #[test]
     fn failed_event_sets_error_and_logs() {
         let mut app = test_app("failed");
         let job = GameJob::new(Platform::Linux64, "20");
@@ -2789,7 +2995,13 @@ mod tests {
             .push(GameJob::new(Platform::Linux64, "2379780"));
         app.push_log(LogLevel::Step, "Download - test content");
         let context = egui::Context::default();
-        for tab in [Tab::Library, Tab::Workshop, Tab::Depots, Tab::Settings] {
+        for tab in [
+            Tab::Library,
+            Tab::Workshop,
+            Tab::History,
+            Tab::Depots,
+            Tab::Settings,
+        ] {
             app.tab = tab;
             let _ = context.run(egui::RawInput::default(), |context| {
                 app.draw(context);

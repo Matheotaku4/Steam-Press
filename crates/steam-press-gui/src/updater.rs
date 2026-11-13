@@ -9,8 +9,26 @@ use std::time::Duration;
 
 const OWNER: &str = "Matheotaku4";
 const REPO: &str = "Steam-Press";
-const BIN_NAME: &str = "steam-press-gui";
 const USER_AGENT: &str = "SteamPress-GUI-Updater";
+
+fn bin_name() -> &'static str {
+    if cfg!(windows) {
+        "steam-press-gui.exe"
+    } else {
+        "steam-press-gui"
+    }
+}
+
+fn platform_tag() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("linux", "x86_64") => "linux-x86_64",
+        ("linux", "aarch64") => "linux-aarch64",
+        ("macos", "x86_64") => "macos-x86_64",
+        ("macos", "aarch64") => "macos-aarch64",
+        ("windows", "x86_64") => "windows-x86_64",
+        _ => "unsupported",
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AvailableUpdate {
@@ -98,7 +116,7 @@ fn select_update(tags: &[String], current: &str) -> Result<Option<AvailableUpdat
         if parsed <= current_version {
             continue;
         }
-        let archive_name = format!("{BIN_NAME}-{version}-linux-x86_64.tar.gz");
+        let archive_name = format!("steam-press-gui-{version}-{}.tar.gz", platform_tag());
         let base =
             format!("https://github.com/{OWNER}/{REPO}/releases/download/{tag}/{archive_name}");
         candidates.push(AvailableUpdate {
@@ -130,8 +148,11 @@ fn parse_version(value: &str) -> Option<(u64, u64, u64)> {
 
 /// Downloads, verifies and replaces the running GUI binary.
 pub fn install(update: &AvailableUpdate) -> Result<(), String> {
-    if !cfg!(target_os = "linux") {
-        return Err("Automatic updates are only available on Linux.".to_string());
+    if !cfg!(any(target_os = "linux", target_os = "macos")) {
+        return Err(format!(
+            "Automatic updates are available on Linux and macOS only; download the Windows archive manually from {}",
+            update.archive_url
+        ));
     }
     let temp_dir =
         std::env::temp_dir().join(format!("steam-press-gui-update-{}", std::process::id()));
@@ -153,7 +174,7 @@ fn install_in(update: &AvailableUpdate, temp_dir: &Path) -> Result<(), String> {
         return Err("update checksum does not match".to_string());
     }
 
-    let extracted = temp_dir.join(BIN_NAME);
+    let extracted = temp_dir.join(bin_name());
     extract_binary(&archive, &extracted)?;
 
     let current =
@@ -238,7 +259,7 @@ fn extract_binary(archive_path: &Path, destination: &Path) -> Result<(), String>
         let path = entry
             .path()
             .map_err(|error| format!("update archive path: {error}"))?;
-        if path.file_name().and_then(|name| name.to_str()) != Some(BIN_NAME) {
+        if path.file_name().and_then(|name| name.to_str()) != Some(bin_name()) {
             continue;
         }
         let mut output =
@@ -247,7 +268,7 @@ fn extract_binary(archive_path: &Path, destination: &Path) -> Result<(), String>
             .map_err(|error| format!("extracting update: {error}"))?;
         return Ok(());
     }
-    Err(format!("update archive does not contain {BIN_NAME}"))
+    Err(format!("update archive does not contain {}", bin_name()))
 }
 
 pub fn restart() -> Result<(), String> {

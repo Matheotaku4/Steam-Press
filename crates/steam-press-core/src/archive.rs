@@ -81,6 +81,44 @@ pub fn checksum_manifest_path(directory: &Path, stem: &str) -> PathBuf {
     directory.join(format!("{stem}.sha256"))
 }
 
+/// Command-line arguments used by `7z t` / `rar t` for an integrity test.
+pub fn verify_args(_compressor: Compressor, password: &str, archive: &Path) -> Vec<String> {
+    vec![
+        "t".to_string(),
+        format!("-p{password}"),
+        archive.to_string_lossy().into_owned(),
+    ]
+}
+
+/// Runs the archiver's integrity test against the first archive part.
+pub fn verify_archive(
+    settings: &Settings,
+    directory: &Path,
+    stem: &str,
+    compressor: Compressor,
+) -> Result<(), String> {
+    let parts = archive_parts(directory, stem, compressor)
+        .map_err(|error| format!("archive scan: {error}"))?;
+    let first = parts
+        .first()
+        .ok_or_else(|| "archive test: no archive parts found".to_string())?;
+    let binary = compressor_binary(compressor, settings)?;
+    let output = std::process::Command::new(binary)
+        .args(verify_args(compressor, settings.archive_password(), first))
+        .output()
+        .map_err(|error| format!("archive test: {error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&output.stderr);
+    let detail = detail.trim();
+    Err(if detail.is_empty() {
+        format!("archive test failed with exit code {}", output.status)
+    } else {
+        format!("archive test failed: {detail}")
+    })
+}
+
 /// Lists the archive files for a stem, including split volumes.
 pub fn archive_parts(
     directory: &Path,
@@ -146,7 +184,7 @@ pub fn write_checksums(
     Ok(Some(manifest))
 }
 
-fn sha256_file(path: &Path) -> io::Result<String> {
+pub(crate) fn sha256_file(path: &Path) -> io::Result<String> {
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
@@ -272,6 +310,32 @@ mod tests {
         assert!(content.contains(&format!("{stem}.7z.001")));
         assert!(content.contains(&format!("{stem}.7z.002")));
         assert!(content.lines().all(|line| line.len() > 70));
+    }
+
+    #[test]
+    fn builds_verification_arguments() {
+        let args = verify_args(Compressor::SevenZip, "pw", Path::new("/out/Game.7z"));
+        assert_eq!(args, vec!["t", "-ppw", "/out/Game.7z"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verification_fails_when_the_archiver_rejects_the_archive() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("archive-verify");
+        let stem = "Game.Build.1.Linux64.public";
+        fs::write(dir.join(format!("{stem}.7z")), b"archive").unwrap();
+        let script = dir.join("fake-7z.sh");
+        fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        let settings = Settings {
+            sevenzip_path: Some(script.clone()),
+            ..Default::default()
+        };
+        verify_archive(&settings, &dir, stem, Compressor::SevenZip).unwrap();
+
+        fs::write(&script, "#!/bin/sh\nexit 2\n").unwrap();
+        assert!(verify_archive(&settings, &dir, stem, Compressor::SevenZip).is_err());
     }
 
     #[test]

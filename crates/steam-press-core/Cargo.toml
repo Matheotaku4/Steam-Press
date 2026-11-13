@@ -1,6 +1,6 @@
 [package]
 name = "steam-press-core"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 license = "MIT"
 description = "Core logic for Steam Press: Steam depot packing, manifests and release templates"
@@ -14,3 +14,4 @@ aes-gcm = "0.10"
 base64 = "0.22"
 sha2 = "0.10"
 rand = "0.8"
+fs2 = "0.4"

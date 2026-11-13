@@ -1,7 +1,7 @@
 use crate::support;
 use crate::{
-    Cli, Command, DepotsAction, InfoArgs, LoginArgs, PackArgs, QueueAction, SearchArgs,
-    TemplateAction, WorkshopAction,
+    Cli, Command, DepotsAction, DiffArgs, ImportArgs, InfoArgs, LoginArgs, PackArgs, QueueAction,
+    SearchArgs, TemplateAction, WorkshopAction,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -10,7 +10,9 @@ use steam_press_core::archive;
 use steam_press_core::compressor::Compressor;
 use steam_press_core::credentials::CredentialStore;
 use steam_press_core::depots::DepotNames;
+use steam_press_core::diff;
 use steam_press_core::downloader::{self, Downloader};
+use steam_press_core::import::{self, ImportOptions};
 use steam_press_core::pack::{PackOptions, PackStatus, Packer};
 use steam_press_core::queue::{
     load_game_queue, load_workshop_queue, save_game_queue, save_workshop_queue, GameJob,
@@ -20,14 +22,48 @@ use steam_press_core::template::{self, TemplateData};
 use steam_press_core::workshop::WorkshopPacker;
 use steam_press_core::{steam, Platform};
 
+fn print_json(value: serde_json::Value) -> Result<(), String> {
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&value).map_err(|error| format!("JSON: {error}"))?
+    );
+    Ok(())
+}
+
+fn outcome_json(outcome: &steam_press_core::PackOutcome) -> serde_json::Value {
+    let (status, error) = match &outcome.status {
+        PackStatus::Completed => ("completed", None),
+        PackStatus::Skipped => ("skipped", None),
+        PackStatus::Failed(message) => ("failed", Some(message.clone())),
+        PackStatus::Cancelled => ("cancelled", None),
+    };
+    serde_json::json!({
+        "job": outcome.stem,
+        "status": status,
+        "error": error,
+        "output": outcome.output.as_ref().map(|path| path.display().to_string()),
+        "infoFiles": outcome.info_files.iter().map(|path| path.display().to_string()).collect::<Vec<_>>(),
+        "buildId": outcome.build_id,
+        "durationMs": outcome.duration.as_millis(),
+        "depots": outcome.depots.iter().map(|depot| serde_json::json!({
+            "depotId": depot.depot_id,
+            "manifestId": depot.manifest_id,
+            "size": depot.size_bytes,
+            "sharedOwner": depot.shared_owner,
+        })).collect::<Vec<_>>(),
+    })
+}
+
 pub fn dispatch(cli: Cli) -> Result<ExitCode, String> {
     match &cli.command {
         Command::Doctor => doctor(&cli),
         Command::Login(args) => login(&cli, args),
         Command::Info(args) => info(&cli, args),
-        Command::Search(args) => search(args),
+        Command::Search(args) => search(&cli, args),
         Command::Queue { action } => queue(&cli, action),
         Command::Pack(args) => pack(&cli, args),
+        Command::Import(args) => import(&cli, args),
+        Command::Diff(args) => diff(&cli, args),
         Command::Workshop { action } => workshop(&cli, action),
         Command::Depots { action } => depots(&cli, action),
         Command::Template { action } => template_command(&cli, action),
@@ -36,38 +72,61 @@ pub fn dispatch(cli: Cli) -> Result<ExitCode, String> {
 
 fn doctor(cli: &Cli) -> Result<ExitCode, String> {
     let (paths, settings) = support::load_settings(cli)?;
-    println!("Config  : {}", paths.config_dir.display());
-    println!("Work    : {}", paths.work_dir.display());
-    println!("Output  : {}", settings.output_dir(&paths).display());
-    println!("Archiver: {}", settings.compressor.label());
+    let output = settings.output_dir(&paths);
+    std::fs::create_dir_all(&output).map_err(|error| format!("output: {error}"))?;
+    let probe = output.join(".steam-press-write-test");
+    std::fs::write(&probe, b"ok").map_err(|error| format!("output is not writable: {error}"))?;
+    let _ = std::fs::remove_file(&probe);
 
     let steamcmd = downloader::steamcmd::SteamCmd::from_settings(&settings).check();
     let depotdownloader =
         downloader::depotdownloader::DepotDownloader::from_settings(&settings).check();
+    let sevenzip = archive::compressor_binary(Compressor::SevenZip, &settings).ok();
+    let rar = archive::compressor_binary(Compressor::Rar, &settings).ok();
+    let names = support::depot_names(&paths);
+
+    if cli.json {
+        let tool = |status: downloader::ToolStatus| {
+            serde_json::json!({
+                "available": status.available,
+                "path": status.path.map(|path| path.display().to_string()),
+                "detail": status.detail,
+            })
+        };
+        print_json(serde_json::json!({
+            "ok": true,
+            "configDir": paths.config_dir.display().to_string(),
+            "workDir": paths.work_dir.display().to_string(),
+            "outputDir": output.display().to_string(),
+            "outputWritable": true,
+            "archiver": settings.compressor.label(),
+            "steamcmd": tool(steamcmd.clone()),
+            "depotdownloader": tool(depotdownloader.clone()),
+            "sevenzip": sevenzip.map(|path| path.display().to_string()),
+            "rar": rar.map(|path| path.display().to_string()),
+            "knownDepots": names.len(),
+        }))?;
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    println!("Config  : {}", paths.config_dir.display());
+    println!("Work    : {}", paths.work_dir.display());
+    println!("Output  : {}", output.display());
+    println!("Archiver: {}", settings.compressor.label());
     for (label, status) in [("SteamCMD", steamcmd), ("DepotDownloader", depotdownloader)] {
         match status.path {
             Some(path) => println!("{label:<14}: {}", path.display()),
             None => println!("{label:<14}: not found"),
         }
     }
-
-    for compressor in [Compressor::SevenZip, Compressor::Rar] {
-        match archive::compressor_binary(compressor, &settings) {
-            Ok(path) => println!("{:<14}: {}", compressor.label(), path.display()),
-            Err(_) => println!("{:<14}: not found", compressor.label()),
+    for (label, path) in [("7-Zip", sevenzip), ("RAR", rar)] {
+        match path {
+            Some(path) => println!("{label:<14}: {}", path.display()),
+            None => println!("{label:<14}: not found"),
         }
     }
-
-    let names = support::depot_names(&paths);
     println!("Known depots: {}", names.len());
-
-    let output = settings.output_dir(&paths);
-    std::fs::create_dir_all(&output).map_err(|error| format!("output: {error}"))?;
-    let probe = output.join(".steam-press-write-test");
-    std::fs::write(&probe, b"ok").map_err(|error| format!("output is not writable: {error}"))?;
-    let _ = std::fs::remove_file(&probe);
     println!("Output  : writable");
-
     Ok(ExitCode::SUCCESS)
 }
 
@@ -87,7 +146,11 @@ fn login(cli: &Cli, args: &LoginArgs) -> Result<ExitCode, String> {
     let store = CredentialStore::new(&paths);
     if username.eq_ignore_ascii_case("anonymous") {
         store.clear().map_err(|error| error.to_string())?;
-        println!("Anonymous mode: no credentials stored.");
+        if cli.json {
+            print_json(serde_json::json!({"ok": true, "anonymous": true}))?;
+        } else {
+            println!("Anonymous mode: no credentials stored.");
+        }
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -102,14 +165,18 @@ fn login(cli: &Cli, args: &LoginArgs) -> Result<ExitCode, String> {
     }
 
     support::save_credentials(&paths, &settings, &username, Some(&password))?;
-    println!("Credentials saved for {username}.");
+    if cli.json {
+        print_json(serde_json::json!({"ok": true, "username": username}))?;
+    } else {
+        println!("Credentials saved for {username}.");
+    }
     Ok(ExitCode::SUCCESS)
 }
 
 fn info(cli: &Cli, args: &InfoArgs) -> Result<ExitCode, String> {
     let (_paths, _settings) = support::load_settings(cli)?;
     let app = steam::fetch_app_info(&args.appid, &args.branch)?;
-    if args.json {
+    if cli.json {
         let store = steam::fetch_store_info(&args.appid).ok();
         let payload = serde_json::json!({
             "appid": app.appid,
@@ -122,6 +189,8 @@ fn info(cli: &Cli, args: &InfoArgs) -> Result<ExitCode, String> {
                 "name": depot.name,
                 "manifestId": depot.manifest_id,
                 "dlcAppid": depot.dlc_appid,
+                "size": depot.size_bytes,
+                "sharedOwner": depot.shared_owner,
             })).collect::<Vec<_>>(),
             "store": store.map(|store| serde_json::json!({
                 "name": store.name,
@@ -169,13 +238,13 @@ fn info(cli: &Cli, args: &InfoArgs) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn search(args: &SearchArgs) -> Result<ExitCode, String> {
+fn search(cli: &Cli, args: &SearchArgs) -> Result<ExitCode, String> {
     let term = args.term.trim();
     if term.chars().count() < 2 {
         return Err("search term must be at least two characters".to_string());
     }
     let results = steam::search_store(term)?;
-    if args.json {
+    if cli.json {
         let payload: Vec<_> = results
             .iter()
             .map(|item| serde_json::json!({"appid": item.appid, "name": item.name}))
@@ -212,6 +281,24 @@ fn queue(cli: &Cli, action: &QueueAction) -> Result<ExitCode, String> {
         QueueAction::List { file } => {
             let path = game_queue_file(cli, file);
             let load = load_game_queue(&path)?;
+            if cli.json {
+                let jobs: Vec<_> = load
+                    .jobs
+                    .iter()
+                    .map(|job| {
+                        serde_json::json!({
+                            "platform": job.platform.key(),
+                            "appid": job.appid,
+                            "branch": job.branch,
+                            "protected": !job.branch_password.is_empty(),
+                        })
+                    })
+                    .collect();
+                print_json(serde_json::json!({
+                    "ok": true, "file": path.display().to_string(), "jobs": jobs, "warnings": load.warnings
+                }))?;
+                return Ok(ExitCode::SUCCESS);
+            }
             if load.jobs.is_empty() {
                 println!("Queue is empty ({})", path.display());
             }
@@ -250,7 +337,13 @@ fn queue(cli: &Cli, action: &QueueAction) -> Result<ExitCode, String> {
             }
             load.jobs.push(job);
             save_game_queue(&path, &load.jobs)?;
-            println!("Job added ({}).", path.display());
+            if cli.json {
+                print_json(
+                    serde_json::json!({"ok": true, "file": path.display().to_string(), "count": load.jobs.len()}),
+                )?;
+            } else {
+                println!("Job added ({}).", path.display());
+            }
         }
         QueueAction::Remove { index, file } => {
             let path = game_queue_file(cli, file);
@@ -260,7 +353,13 @@ fn queue(cli: &Cli, action: &QueueAction) -> Result<ExitCode, String> {
             }
             load.jobs.remove(index - 1);
             save_game_queue(&path, &load.jobs)?;
-            println!("Job removed.");
+            if cli.json {
+                print_json(
+                    serde_json::json!({"ok": true, "file": path.display().to_string(), "count": load.jobs.len()}),
+                )?;
+            } else {
+                println!("Job removed.");
+            }
         }
         QueueAction::Move { from, to, file } => {
             let path = game_queue_file(cli, file);
@@ -271,12 +370,24 @@ fn queue(cli: &Cli, action: &QueueAction) -> Result<ExitCode, String> {
             let job = load.jobs.remove(from - 1);
             load.jobs.insert(to - 1, job);
             save_game_queue(&path, &load.jobs)?;
-            println!("Queue reordered.");
+            if cli.json {
+                print_json(
+                    serde_json::json!({"ok": true, "file": path.display().to_string(), "count": load.jobs.len()}),
+                )?;
+            } else {
+                println!("Queue reordered.");
+            }
         }
         QueueAction::Clear { file } => {
             let path = game_queue_file(cli, file);
             save_game_queue(&path, &[])?;
-            println!("Queue cleared.");
+            if cli.json {
+                print_json(
+                    serde_json::json!({"ok": true, "file": path.display().to_string(), "count": 0}),
+                )?;
+            } else {
+                println!("Queue cleared.");
+            }
         }
         QueueAction::Import { source, file } => {
             let path = game_queue_file(cli, file);
@@ -290,6 +401,12 @@ fn queue(cli: &Cli, action: &QueueAction) -> Result<ExitCode, String> {
                 }
             }
             save_game_queue(&path, &load.jobs)?;
+            if cli.json {
+                print_json(
+                    serde_json::json!({"ok": true, "file": path.display().to_string(), "added": added, "count": load.jobs.len(), "warnings": incoming.warnings}),
+                )?;
+                return Ok(ExitCode::SUCCESS);
+            }
             println!("{added} job(s) imported.");
             for warning in incoming.warnings {
                 eprintln!("warning: {warning}");
@@ -299,7 +416,13 @@ fn queue(cli: &Cli, action: &QueueAction) -> Result<ExitCode, String> {
             let path = game_queue_file(cli, file);
             let load = load_game_queue(&path)?;
             save_game_queue(destination, &load.jobs)?;
-            println!("Queue exported to {}.", destination.display());
+            if cli.json {
+                print_json(
+                    serde_json::json!({"ok": true, "source": path.display().to_string(), "destination": destination.display().to_string(), "count": load.jobs.len()}),
+                )?;
+            } else {
+                println!("Queue exported to {}.", destination.display());
+            }
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -353,40 +476,57 @@ fn pack(cli: &Cli, args: &PackArgs) -> Result<ExitCode, String> {
         paths,
         downloader_kind: args.downloader.map(Into::into).unwrap_or_default(),
         dry_run: args.dry_run,
+        fresh: args.fresh,
         credentials,
         depot_names,
     };
-    let sink = support::event_sink(cli.verbose);
+    let sink = if cli.json {
+        steam_press_core::events::EventSink::noop()
+    } else {
+        support::event_sink(cli.verbose)
+    };
     let mut failed = 0;
+    let mut results = Vec::new();
 
     for job in &jobs {
         let packer = Packer::new(options.clone());
         let outcome = packer.run(job, sink.clone());
+        results.push(outcome_json(&outcome));
         match &outcome.status {
             PackStatus::Completed | PackStatus::Skipped => {
-                if let Some(output) = &outcome.output {
-                    println!("{}", output.display());
-                    let checksum = output.with_file_name(format!("{}.sha256", outcome.stem));
-                    if checksum.is_file() {
-                        println!("Checksum: {}", checksum.display());
+                if !cli.json {
+                    if let Some(output) = &outcome.output {
+                        println!("{}", output.display());
+                        let checksum = output.with_file_name(format!("{}.sha256", outcome.stem));
+                        if checksum.is_file() {
+                            println!("Checksum: {}", checksum.display());
+                        }
                     }
+                    println!(
+                        "{} — {:?} en {:.1}s",
+                        outcome.stem,
+                        outcome.status,
+                        outcome.duration.as_secs_f32()
+                    );
                 }
-                println!(
-                    "{} — {:?} en {:.1}s",
-                    outcome.stem,
-                    outcome.status,
-                    outcome.duration.as_secs_f32()
-                );
             }
             PackStatus::Failed(message) => {
                 failed += 1;
-                eprintln!("{} - failed: {message}", outcome.stem);
+                if !cli.json {
+                    eprintln!("{} - failed: {message}", outcome.stem);
+                }
             }
             PackStatus::Cancelled => {
                 failed += 1;
-                eprintln!("{} - cancelled", outcome.stem);
+                if !cli.json {
+                    eprintln!("{} - cancelled", outcome.stem);
+                }
             }
         }
+    }
+
+    if cli.json {
+        print_json(serde_json::json!({"ok": failed == 0, "jobs": results}))?;
     }
 
     Ok(if failed > 0 {
@@ -394,6 +534,130 @@ fn pack(cli: &Cli, args: &PackArgs) -> Result<ExitCode, String> {
     } else {
         ExitCode::SUCCESS
     })
+}
+
+fn import(cli: &Cli, args: &ImportArgs) -> Result<ExitCode, String> {
+    let (paths, mut settings) = support::load_settings(cli)?;
+    let (compressor, skip) = resolve_compressor(&args.compressor, args.no_compress)?;
+    settings.compressor = compressor;
+    if skip {
+        settings.skip_compression = true;
+    }
+    let sink = if cli.json {
+        steam_press_core::events::EventSink::noop()
+    } else {
+        support::event_sink(cli.verbose)
+    };
+    let options = ImportOptions {
+        settings,
+        paths,
+        source: args.path.clone(),
+        appid: args.appid.clone(),
+        branch: args.branch.clone(),
+        platform: Platform::from(args.os),
+        name: args.name.clone(),
+        install_dir: args.install_dir.clone(),
+        fresh: args.fresh,
+        depot_names: support::depot_names(&support::paths(cli)),
+    };
+    let outcome = import::import_local(&options, sink).map_err(|error| error.to_string())?;
+    if cli.json {
+        print_json(serde_json::json!({
+            "ok": true,
+            "job": outcome.stem,
+            "status": match outcome.status { PackStatus::Skipped => "skipped", _ => "completed" },
+            "output": outcome.output.as_ref().map(|path| path.display().to_string()),
+            "manifest": outcome.manifest.as_ref().map(|path| path.display().to_string()),
+            "copiedBytes": outcome.copied_bytes,
+            "durationMs": outcome.duration.as_millis(),
+        }))?;
+    } else {
+        println!(
+            "{} — {:?} en {:.1}s",
+            outcome.stem,
+            outcome.status,
+            outcome.duration.as_secs_f32()
+        );
+        if let Some(output) = &outcome.output {
+            println!("{}", output.display());
+        }
+        if let Some(manifest) = &outcome.manifest {
+            println!("Manifest: {}", manifest.display());
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn diff(cli: &Cli, args: &DiffArgs) -> Result<ExitCode, String> {
+    let (paths, mut settings) = support::load_settings(cli)?;
+    let (compressor, skip) = resolve_compressor(&args.compressor, args.no_compress)?;
+    settings.compressor = compressor;
+    if skip {
+        settings.skip_compression = true;
+    }
+    let stem = args.stem.clone().unwrap_or_else(|| {
+        let old = args
+            .old
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "old".to_string());
+        let new = args
+            .new
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "new".to_string());
+        format!(
+            "{}-to-{}",
+            steam_press_core::naming::sanitize_game_name(&old),
+            steam_press_core::naming::sanitize_game_name(&new)
+        )
+    });
+    let (report, report_path, output) = if args.archive {
+        let archive = diff::create_update_archive(
+            &settings,
+            &paths,
+            &args.old,
+            &args.new,
+            &stem,
+            &support::event_sink(cli.verbose),
+        )
+        .map_err(|error| error.to_string())?;
+        (archive.report, Some(archive.report_path), archive.output)
+    } else {
+        (
+            diff::diff_directories(&args.old, &args.new)
+                .map_err(|error| format!("diff: {error}"))?,
+            None,
+            None,
+        )
+    };
+    if cli.json {
+        print_json(serde_json::json!({
+            "ok": true,
+            "stem": stem,
+            "report": report,
+            "reportPath": report_path.as_ref().map(|path| path.display().to_string()),
+            "output": output.as_ref().map(|path| path.display().to_string()),
+        }))?;
+    } else {
+        println!(
+            "{} added, {} modified, {} removed, {} unchanged",
+            report.added.len(),
+            report.modified.len(),
+            report.removed.len(),
+            report.unchanged
+        );
+        for change in report.changes() {
+            println!("{:?}\t{}", change.kind, change.path);
+        }
+        if let Some(path) = report_path {
+            println!("Report: {}", path.display());
+        }
+        if let Some(path) = output {
+            println!("Archive: {}", path.display());
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
@@ -412,13 +676,27 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
             }
             load.jobs.push(job);
             save_workshop_queue(&path, &load.jobs)?;
-            println!("Item added ({}).", path.display());
+            if cli.json {
+                print_json(
+                    serde_json::json!({"ok": true, "file": path.display().to_string(), "count": load.jobs.len()}),
+                )?;
+            } else {
+                println!("Item added ({}).", path.display());
+            }
         }
         WorkshopAction::List { file } => {
             let path = workshop_queue_file(cli, file);
             let load = load_workshop_queue(&path)?;
             if load.jobs.is_empty() {
                 println!("Queue is empty ({})", path.display());
+            }
+            if cli.json {
+                print_json(serde_json::json!({
+                    "ok": true, "file": path.display().to_string(),
+                    "jobs": load.jobs.iter().map(|job| serde_json::json!({"appid": job.appid, "workshopId": job.workshop_id})).collect::<Vec<_>>(),
+                    "warnings": load.warnings
+                }))?;
+                return Ok(ExitCode::SUCCESS);
             }
             for (index, job) in load.jobs.iter().enumerate() {
                 println!("{:>3}. {:>8} / {}", index + 1, job.appid, job.workshop_id);
@@ -439,13 +717,25 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
                 }
             }
             save_workshop_queue(&path, &load.jobs)?;
-            println!("{added} item(s) imported.");
+            if cli.json {
+                print_json(
+                    serde_json::json!({"ok": true, "file": path.display().to_string(), "added": added, "count": load.jobs.len()}),
+                )?;
+            } else {
+                println!("{added} item(s) imported.");
+            }
         }
         WorkshopAction::Export { destination, file } => {
             let path = workshop_queue_file(cli, file);
             let load = load_workshop_queue(&path)?;
             save_workshop_queue(destination, &load.jobs)?;
-            println!("Queue exported to {}.", destination.display());
+            if cli.json {
+                print_json(
+                    serde_json::json!({"ok": true, "source": path.display().to_string(), "destination": destination.display().to_string(), "count": load.jobs.len()}),
+                )?;
+            } else {
+                println!("Queue exported to {}.", destination.display());
+            }
         }
         WorkshopAction::Run {
             queue_files,
@@ -475,19 +765,38 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
                 paths,
                 downloader_kind: downloader.map(Into::into).unwrap_or_default(),
                 dry_run: false,
+                fresh: false,
                 credentials,
                 depot_names: DepotNames::default(),
             };
-            let sink = support::event_sink(cli.verbose);
+            let sink = if cli.json {
+                steam_press_core::events::EventSink::noop()
+            } else {
+                support::event_sink(cli.verbose)
+            };
             let mut failed = 0;
+            let mut results = Vec::new();
             for job in &jobs {
                 let packer = WorkshopPacker::new(options.clone());
                 let outcome = packer.run(job, sink.clone());
-                println!("{outcome}");
-                if let Some(output) = &outcome.output {
-                    let checksum = output.with_file_name(format!("{}.sha256", outcome.stem));
-                    if checksum.is_file() {
-                        println!("Checksum: {}", checksum.display());
+                results.push(serde_json::json!({
+                    "job": outcome.stem,
+                    "status": match &outcome.status {
+                        PackStatus::Completed => "completed",
+                        PackStatus::Skipped => "skipped",
+                        PackStatus::Failed(_) => "failed",
+                        PackStatus::Cancelled => "cancelled",
+                    },
+                    "output": outcome.output.as_ref().map(|path| path.display().to_string()),
+                    "durationMs": outcome.duration.as_millis(),
+                }));
+                if !cli.json {
+                    println!("{outcome}");
+                    if let Some(output) = &outcome.output {
+                        let checksum = output.with_file_name(format!("{}.sha256", outcome.stem));
+                        if checksum.is_file() {
+                            println!("Checksum: {}", checksum.display());
+                        }
                     }
                 }
                 if matches!(
@@ -496,6 +805,9 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
                 ) {
                     failed += 1;
                 }
+            }
+            if cli.json {
+                print_json(serde_json::json!({"ok": failed == 0, "jobs": results}))?;
             }
             return Ok(if failed > 0 {
                 ExitCode::from(1)
@@ -515,15 +827,28 @@ fn depots(cli: &Cli, action: &DepotsAction) -> Result<ExitCode, String> {
             names
                 .save(paths.depots_file())
                 .map_err(|error| error.to_string())?;
-            println!("{} depot names synchronized.", names.len());
+            if cli.json {
+                print_json(serde_json::json!({"ok": true, "count": names.len()}))?;
+            } else {
+                println!("{} depot names synchronized.", names.len());
+            }
         }
         DepotsAction::Lookup { depot_id } => {
             let (paths, _) = support::load_settings(cli)?;
             let names = support::depot_names(&paths);
             match names.get(depot_id) {
+                Some(name) if cli.json => {
+                    print_json(serde_json::json!({"ok": true, "depotId": depot_id, "name": name}))?;
+                }
                 Some(name) => println!("{depot_id} = {name}"),
                 None => {
-                    eprintln!("unknown depot {depot_id}");
+                    if cli.json {
+                        print_json(
+                            serde_json::json!({"ok": false, "error": format!("unknown depot {depot_id}")}),
+                        )?;
+                    } else {
+                        eprintln!("unknown depot {depot_id}");
+                    }
                     return Ok(ExitCode::from(1));
                 }
             }
@@ -533,6 +858,7 @@ fn depots(cli: &Cli, action: &DepotsAction) -> Result<ExitCode, String> {
             let names = support::depot_names(&paths);
             let needle = search.as_deref().map(str::to_lowercase);
             let mut shown = 0;
+            let mut rows = Vec::new();
             for (depot_id, name) in names.entries() {
                 let matches = needle
                     .as_deref()
@@ -542,11 +868,18 @@ fn depots(cli: &Cli, action: &DepotsAction) -> Result<ExitCode, String> {
                     })
                     .unwrap_or(true);
                 if matches {
-                    println!("{depot_id} = {name}");
+                    if !cli.json {
+                        println!("{depot_id} = {name}");
+                    }
+                    rows.push(serde_json::json!({"depotId": depot_id, "name": name}));
                     shown += 1;
                 }
             }
-            println!("{shown} depot(s).");
+            if cli.json {
+                print_json(serde_json::json!({"ok": true, "count": shown, "depots": rows}))?;
+            } else {
+                println!("{shown} depot(s).");
+            }
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -561,10 +894,12 @@ fn template_command(cli: &Cli, action: &TemplateAction) -> Result<ExitCode, Stri
             )
             .map_err(|error| format!("JSON du job : {error}"))?;
             let template = std::fs::read_to_string(template).map_err(|error| error.to_string())?;
-            print!(
-                "{}",
-                steam_press_core::template::render_custom(&template, &data)
-            );
+            let rendered = steam_press_core::template::render_custom(&template, &data);
+            if cli.json {
+                print_json(serde_json::json!({"ok": true, "rendered": rendered}))?;
+            } else {
+                print!("{rendered}");
+            }
         }
     }
     Ok(ExitCode::SUCCESS)

@@ -43,49 +43,105 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
-  linux-x86_64:
+  build:
+    name: Build ${{ matrix.platform }}
     needs: prepare
     if: needs.prepare.outputs.publish == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os != 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x86_64
+            exe_suffix: ""
+          - os: macos-15-intel
+            platform: macos-x86_64
+            exe_suffix: ""
+          - os: macos-15
+            platform: macos-aarch64
+            exe_suffix: ""
+          - os: windows-latest
+            platform: windows-x86_64
+            exe_suffix: ".exe"
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - name: Build CLIs and GUI
+      - name: Build CLI and GUI
         run: cargo build --release --locked -p steam-press-cli -p steam-press-gui
       - name: Package
         shell: bash
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+          EXE_SUFFIX: ${{ matrix.exe_suffix }}
         run: |
           set -euo pipefail
           version="${VERSION}"
+          platform="${PLATFORM}"
+          suffix="${EXE_SUFFIX}"
           mkdir -p dist
 
-          combined="steam-press-${version}-linux-x86_64"
+          combined="steam-press-${version}-${platform}"
           mkdir -p "dist/${combined}/docs"
-          cp target/release/steam-press target/release/steam-press-gui "dist/${combined}/"
+          cp "target/release/steam-press${suffix}" "dist/${combined}/"
+          cp "target/release/steam-press-gui${suffix}" "dist/${combined}/"
           cp README.md "dist/${combined}/"
           cp docs/usage.md "dist/${combined}/docs/"
           tar -C dist -czf "dist/${combined}.tar.gz" "${combined}"
 
-          cli="steam-press-cli-${version}-linux-x86_64"
+          cli="steam-press-cli-${version}-${platform}"
           mkdir -p "dist/${cli}/docs"
-          cp target/release/steam-press "dist/${cli}/"
+          cp "target/release/steam-press${suffix}" "dist/${cli}/"
           cp README.md "dist/${cli}/"
           cp docs/usage.md "dist/${cli}/docs/"
           tar -C dist -czf "dist/${cli}.tar.gz" "${cli}"
 
-          gui="steam-press-gui-${version}-linux-x86_64"
+          gui="steam-press-gui-${version}-${platform}"
           mkdir -p "dist/${gui}/docs"
-          cp target/release/steam-press-gui "dist/${gui}/"
+          cp "target/release/steam-press-gui${suffix}" "dist/${gui}/"
           cp README.md "dist/${gui}/"
           cp docs/usage.md "dist/${gui}/docs/"
           tar -C dist -czf "dist/${gui}.tar.gz" "${gui}"
 
-          (cd dist && sha256sum "${combined}.tar.gz" > "${combined}.tar.gz.sha256" \
-            && sha256sum "${cli}.tar.gz" > "${cli}.tar.gz.sha256" \
-            && sha256sum "${gui}.tar.gz" > "${gui}.tar.gz.sha256" \
-            && sha256sum ./*.tar.gz > SHA256SUMS)
+          checksum() {
+            if command -v sha256sum >/dev/null 2>&1; then
+              sha256sum "$1" > "$1.sha256"
+            else
+              shasum -a 256 "$1" > "$1.sha256"
+            fi
+          }
+          checksum "dist/${combined}.tar.gz"
+          checksum "dist/${cli}.tar.gz"
+          checksum "dist/${gui}.tar.gz"
+      - name: Upload platform archives
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.platform }}
+          path: dist/*.tar.gz*
+          if-no-files-found: error
+
+  publish:
+    needs: [prepare, build]
+    if: always() && needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - name: Require the Linux archives
+        run: |
+          set -euo pipefail
+          ls dist/steam-press-*-linux-x86_64.tar.gz >/dev/null
+      - name: Build SHA256SUMS
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum ./*.tar.gz > SHA256SUMS
       - name: Publish GitHub release
         shell: bash
         env:

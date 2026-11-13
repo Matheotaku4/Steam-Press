@@ -100,6 +100,8 @@ pub struct Settings {
     pub compress_password: String,
     pub template: Option<PathBuf>,
     pub key: String,
+    pub verify_archives: bool,
+    pub disk_margin_mb: u64,
 }
 
 impl Default for Settings {
@@ -120,6 +122,8 @@ impl Default for Settings {
             compress_password: "cs.rin.ru".to_string(),
             template: None,
             key: String::new(),
+            verify_archives: true,
+            disk_margin_mb: 1024,
         }
     }
 }
@@ -167,6 +171,12 @@ impl Settings {
         settings.rar_path = optional_path(&ini, "rarpath");
         settings.template = optional_path(&ini, "template");
         settings.key = text(&ini, "key");
+        if ini.get("SSP", "verifyarchives").is_some() {
+            settings.verify_archives = flag(&ini, "verifyarchives");
+        }
+        if let Ok(margin) = text(&ini, "diskmarginmb").parse::<u64>() {
+            settings.disk_margin_mb = margin;
+        }
         let password = text(&ini, "compresspassword");
         if !password.is_empty() {
             settings.compress_password = password;
@@ -197,6 +207,12 @@ impl Settings {
         ini.set("SSP", "rinruusername", self.uploader.trim());
         ini.set("SSP", "filehost", self.filehost.trim());
         ini.set("SSP", "compresspassword", self.archive_password());
+        ini.set(
+            "SSP",
+            "verifyarchives",
+            if self.verify_archives { "1" } else { "0" },
+        );
+        ini.set("SSP", "diskmarginmb", &self.disk_margin_mb.to_string());
         ini.set("SSP", "key", &self.key);
 
         for (key, value) in [

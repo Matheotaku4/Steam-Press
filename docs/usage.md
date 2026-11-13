@@ -42,7 +42,8 @@ steam-press info 2379780 --json
 ```
 
 La commande interroge le Steam Store et affiche l'AppID et le nom des résultats. `--json`
-produit une sortie exploitable par un script, pour `search` comme pour `info`.
+produit une sortie exploitable par un script ; l'option est globale et fonctionne aussi avec
+`doctor`, `login`, `queue`, `workshop`, `depots`, `pack`, `template`, `import` et `diff`.
 
 ```bash
 steam-press queue add 2379780 --os lin64 --branch public
@@ -94,7 +95,36 @@ Un job dont l'archive existe déjà est ignoré. `--compressor none` équivaut �
 `--no-compress`. Après compression, un manifeste `<Jeu>...sha256` est écrit à côté des
 volumes ; il est compatible avec `sha256sum -c`.
 
-## 5. Atelier
+Avant le téléchargement, Steam Press vérifie l'espace libre (avec une marge réglable via
+`diskmarginmb`) et estime la taille des dépôts. Un dossier de travail interrompu est repris
+au prochain lancement ; `--fresh` l'efface pour repartir de zéro. Quand `verifyarchives=1`,
+chaque archive est testée avec l'outil de compression après sa création (mot de passe inclus).
+
+Les dépôts partagés (`shareddepots`) sont téléchargés avec le jeu et reçoivent un
+`appmanifest_228980.acf` valide dans `steamapps`.
+
+## 5. Import local et diff
+
+```bash
+# Importer une installation existante sans télécharger.
+steam-press import /games/MyGame --appid 2379780 --os lin64 --compressor 7z
+
+# Comparer deux dossiers de build.
+steam-press diff ./build-a ./build-b
+
+# Écrire une archive de mise à jour dans le dossier de sortie.
+steam-press diff ./build-a ./build-b --archive --stem MyGame.patch
+
+# Sortie JSON pour l'automatisation.
+steam-press diff ./build-a ./build-b --json
+```
+
+`import` lit les métadonnées Steam, prépare les manifestes et compresse le dossier fourni.
+`diff` compare les tailles et les empreintes SHA-256, affiche les fichiers ajoutés, modifiés et
+supprimés, puis peut copier les ajouts/modifications dans une archive. Les suppressions sont
+signalées mais ne sont pas incluses dans l'archive de mise à jour.
+
+## 6. Atelier
 
 ```bash
 steam-press workshop add 730 123456
@@ -106,7 +136,7 @@ Format `.SSWQ` : `appid|workshopid`. L'import accepte aussi les lignes
 `workshop_download_item <appid> <id> validate`. La sortie s'appelle
 `Workshop_<appid>_<id>.7z`.
 
-## 6. Manifestes et vie privée
+## 7. Manifestes et vie privée
 
 Après téléchargement, Steam Press :
 
@@ -115,12 +145,13 @@ Après téléchargement, Steam Press :
    temporaires ;
 3. remet `LastOwner` et `LauncherPath` à `"0"` dans l'`.acf` existant ;
 4. génère un `.acf` complet si le moteur n'en a pas fourni ;
-5. calcule les lignes `depot - nom [Manifest id]`.
+5. génère un `appmanifest_228980.acf` pour les dépôts partagés ;
+6. calcule les lignes `depot - nom [Manifest id]`.
 
 Un `.acf` généré contient `StateFlags 4`, `LastUpdated "0"`, `LastPlayed "0"`,
 `LastOwner "0"`, `InstalledDepots`, `UserConfig` et `MountedConfig`.
 
-## 7. Templates
+## 8. Templates
 
 Créez `mon-template.txt`, puis renseignez son chemin dans les réglages (ou `template` dans
 `settings.ini`).
@@ -145,7 +176,7 @@ steam-press template render ./job.json ./mon-template.txt
 `app_id`, `description`, `website`, `username`, `filehost`, `upload_date` et `depots`
 (tableau de `depot_id`, `depot_name`, `manifest_id`).
 
-## 8. Réglages
+## 9. Réglages
 
 Les clés de `settings.ini` restent compatibles avec SuperSteamPacker :
 
@@ -166,18 +197,23 @@ rarpath=
 compresspassword=cs.rin.ru
 template=
 key=<clé locale>
+verifyarchives=1
+diskmarginmb=1024
 ```
 
-## 9. Mises à jour de la GUI
+## 10. Mises à jour de la GUI
 
 La GUI vérifie automatiquement les releases principales `v*` au démarrage. La page **Settings
 > Updates** affiche la version courante, permet de relancer la vérification et d'installer une
 mise à jour. L'archive est téléchargée depuis GitHub, son empreinte SHA-256 est vérifiée, puis
-l'exécutable est remplacé et l'application redémarre. Les mises à jour automatiques sont
-limitées à Linux et nécessitent un accès en écriture au dossier de l'exécutable. Les files
-Library et Workshop sont sauvegardées automatiquement et restaurées au lancement suivant.
+l'exécutable est remplacé et l'application redémarre. L'installation automatique fonctionne
+sous Linux et macOS ; sous Windows, l'application indique l'archive à télécharger et à
+décompresser manuellement. Elle nécessite un accès en écriture au dossier de l'exécutable.
+Les files Library et Workshop ainsi que l'historique sont sauvegardés automatiquement et
+restaurés au lancement suivant. L'onglet **History** permet de rouvrir le dossier de sortie
+d'un job terminé, de consulter son journal et de le relancer.
 
-## 10. Erreurs fréquentes
+## 11. Erreurs fréquentes
 
 | Message | Cause / solution |
 |---|---|
@@ -188,7 +224,7 @@ Library et Workshop sont sauvegardées automatiquement et restaurées au lanceme
 | `7-Zip introuvable` | installez `p7zip-full` ou renseignez `sevenzippath` |
 | `aucun identifiant enregistré` | `steam-press login` ou `--anonymous` |
 
-## 11. Sécurité
+## 12. Sécurité
 
 - Les identifiants sont chiffrés en AES-256-GCM avec une clé générée localement.
 - Le fichier `credentials.bin` est créé en mode `0600`.

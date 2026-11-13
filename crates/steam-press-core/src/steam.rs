@@ -15,6 +15,8 @@ pub struct DepotEntry {
     pub name: String,
     pub manifest_id: String,
     pub dlc_appid: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub shared_owner: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,18 +117,29 @@ pub fn parse_app_info(appid: &str, branch: &str, json: &str) -> Result<AppInfo, 
         .and_then(|seconds| seconds.parse::<i64>().ok())
         .and_then(|seconds| DateTime::from_timestamp(seconds, 0));
 
+    let shared = app
+        .get("shareddepots")
+        .or_else(|| depots_object.and_then(|depots| depots.get("shareddepots")))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
     let mut depots = Vec::new();
     if let Some(depots_object) = depots_object.and_then(Value::as_object) {
         for (depot_id, depot) in depots_object {
-            if depot_id.eq_ignore_ascii_case("branches") || depot_id.parse::<u64>().is_err() {
+            if depot_id.eq_ignore_ascii_case("branches")
+                || depot_id.eq_ignore_ascii_case("shareddepots")
+                || depot_id.parse::<u64>().is_err()
+            {
                 continue;
             }
             let Some(depot_object) = depot.as_object() else {
                 continue;
             };
-            let manifest_id = depot_object
+            let manifest = depot_object
                 .get("manifests")
-                .and_then(|manifests| manifests.get(branch).or_else(|| manifests.get("public")))
+                .and_then(|manifests| manifests.get(branch).or_else(|| manifests.get("public")));
+            let manifest_id = manifest
                 .and_then(|manifest| manifest.get("gid"))
                 .and_then(number_or_string)
                 .unwrap_or_default();
@@ -142,8 +155,55 @@ pub fn parse_app_info(appid: &str, branch: &str, json: &str) -> Result<AppInfo, 
                     .to_string(),
                 manifest_id,
                 dlc_appid: depot_object.get("dlcappid").and_then(number_or_string),
+                size_bytes: manifest
+                    .and_then(|manifest| manifest.get("size"))
+                    .and_then(number_or_string)
+                    .and_then(|size| size.parse::<u64>().ok()),
+                shared_owner: shared
+                    .get(depot_id)
+                    .and_then(number_or_string)
+                    .filter(|owner| !owner.is_empty()),
             });
         }
+    }
+
+    for (depot_id, owner) in &shared {
+        if depots.iter().any(|depot| &depot.depot_id == depot_id) {
+            continue;
+        }
+        let Some(owner) = number_or_string(owner).filter(|owner| !owner.is_empty()) else {
+            continue;
+        };
+        let depot_object = depots_object
+            .and_then(|depots| depots.get(depot_id))
+            .and_then(Value::as_object);
+        let manifest = depot_object
+            .and_then(|depot| depot.get("manifests"))
+            .and_then(|manifests| manifests.get(branch).or_else(|| manifests.get("public")));
+        let manifest_id = manifest
+            .and_then(|manifest| manifest.get("gid"))
+            .and_then(number_or_string)
+            .unwrap_or_default();
+        if manifest_id.is_empty() {
+            continue;
+        }
+        depots.push(DepotEntry {
+            depot_id: depot_id.clone(),
+            name: depot_object
+                .and_then(|depot| depot.get("name"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            manifest_id,
+            dlc_appid: depot_object
+                .and_then(|depot| depot.get("dlcappid"))
+                .and_then(number_or_string),
+            size_bytes: manifest
+                .and_then(|manifest| manifest.get("size"))
+                .and_then(number_or_string)
+                .and_then(|size| size.parse::<u64>().ok()),
+            shared_owner: Some(owner),
+        });
     }
     depots.sort_by_key(|depot| depot.depot_id.parse::<u64>().unwrap_or(u64::MAX));
 
@@ -313,6 +373,28 @@ mod tests {
         assert_eq!(results[0].appid, "2379780");
         assert_eq!(results[0].name, "Balatro");
         assert_eq!(results[1].name, "Balatro Soundtrack");
+    }
+
+    #[test]
+    fn parses_shared_depots_and_manifest_sizes() {
+        let json = r#"{
+          "status": "success",
+          "data": { "42": {
+            "common": {"name": "Shared Game"},
+            "config": {"installdir": "SharedGame"},
+            "shareddepots": {"100": "228980"},
+            "depots": {
+              "branches": {"public": {"buildid": "7", "timeupdated": "0"}},
+              "10": {"name": "Game", "manifests": {"public": {"gid": "11", "size": "1000"}}},
+              "100": {"name": "Redistributable", "manifests": {"public": {"gid": "22", "size": "2000"}}}
+            }
+          }}
+        }"#;
+        let info = parse_app_info("42", "public", json).unwrap();
+        assert_eq!(info.depots.len(), 2);
+        assert_eq!(info.depots[0].size_bytes, Some(1000));
+        assert_eq!(info.depots[1].manifest_id, "22");
+        assert_eq!(info.depots[1].shared_owner.as_deref(), Some("228980"));
     }
 
     #[test]

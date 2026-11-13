@@ -7,8 +7,8 @@ generates cs.rin.ru release notes. It is a Rust reimplementation of the workflow
 by [SuperSteamPacker](https://github.com/Masquerade64/SuperSteamPacker), with the reliability
 ideas of [OmniPacker](https://github.com/elgreams/OmniPacker).
 
-Linux is the primary target of this first version. The code stays portable so Windows and
-macOS support can be added later.
+Linux is the primary target. CI also checks and packages Windows and macOS builds; the GUI
+updater installs automatically on Linux and macOS and points Windows users at the archive.
 
 ## Features
 
@@ -27,9 +27,19 @@ macOS support can be added later.
 - Depot names synchronized from
   [SteamDepotNames](https://github.com/Masquerade64/SteamDepotNames).
 - Cancellation during download or compression; partial archives are kept.
+- Archive verification after compression (`verify_archives`), plus `sha256sum`-compatible
+  checksum manifests for every packed archive.
+- Disk-space preflight before downloading, resumable work directories with checkpoints, and a
+  `--fresh` option to discard them.
+- Shared Steamworks redistributables (`shareddepots`) are downloaded and get their own
+  `appmanifest_228980.acf`.
+- Import an existing local installation (`import`) or compare two builds (`diff`) and build an
+  update archive with only added and modified files.
+- Global `--json` output for doctor, search, info, login, queue, workshop, depots, pack,
+  template, import and diff.
 - Encrypted local credential vault (AES-256-GCM).
-- GUI queues are saved automatically and restored at the next launch.
-- `sha256sum`-compatible checksum manifests for every packed archive.
+- GUI queues and the finished-job history are saved automatically and restored at the next
+  launch.
 - Automatic GUI updates from the main `v*` releases, with SHA-256 verification and restart.
 
 ## Architecture
@@ -58,26 +68,27 @@ Binaries land in `target/release/steam-press` and `target/release/steam-press-gu
 
 ## Releases
 
-GitHub Actions publishes one Linux release when the version in
-`crates/steam-press-core/Cargo.toml` has no matching release yet. Each `v<version>` release
-contains three archives plus checksums:
+GitHub Actions publishes one release when the version in
+`crates/steam-press-core/Cargo.toml` has no matching release yet. A build matrix produces the
+same three archives for Linux, macOS (Intel and Apple Silicon) and Windows (x86_64):
 
-- `steam-press-<version>-linux-x86_64.tar.gz` with both binaries, the README and the guide;
-- `steam-press-cli-<version>-linux-x86_64.tar.gz` with the CLI only;
-- `steam-press-gui-<version>-linux-x86_64.tar.gz` with the GUI only.
+- `steam-press-<version>-<platform>.tar.gz` with both binaries, the README and the guide;
+- `steam-press-cli-<version>-<platform>.tar.gz` with the CLI only;
+- `steam-press-gui-<version>-<platform>.tar.gz` with the GUI only.
 
-Every archive has a `.sha256` file, and `SHA256SUMS` covers all three. To publish from a tag
-instead:
+`<platform>` is `linux-x86_64`, `macos-x86_64`, `macos-aarch64` or `windows-x86_64`. Every archive has a
+`.sha256` file, and `SHA256SUMS` covers every archive. To publish from a tag instead:
 
 ```bash
-git tag -a v0.5.0 -m "Steam Press 0.5.0"
-git push origin v0.5.0
+git tag -a v0.6.0 -m "Steam Press 0.6.0"
+git push origin v0.6.0
 ```
 
 The GUI checks the main `v*` releases on startup and from **Settings > Updates**. It downloads
-the GUI archive, verifies its SHA-256 checksum, replaces the running executable and restarts.
-The `CI` workflow runs formatting, Clippy and the test suite on every push to `main` and on
-pull requests.
+the GUI archive for its platform, verifies its SHA-256 checksum, replaces the running
+executable and restarts. Automatic installation is available on Linux and macOS; on Windows
+the app reports the download URL to use manually. The `CI` workflow runs formatting, Clippy and
+the test suite on Linux, and workspace checks on macOS and Windows.
 
 ## Quick start (CLI)
 
@@ -100,9 +111,20 @@ steam-press depots sync
 steam-press queue add 2379780 --os lin64
 steam-press pack --queue ~/.config/steam-press/queue.sspq --compressor 7z
 
-# One-off job, dry run first.
+# One-off job, dry run first, then resume or restart from scratch.
 steam-press pack --appid 2379780 --os lin64 --dry-run
 steam-press pack --appid 2379780 --os lin64 --downloader steamcmd
+steam-press pack --appid 2379780 --os lin64 --fresh
+
+# Import an existing installation and produce the usual archive.
+steam-press import /games/MyGame --appid 2379780 --os lin64 --compressor 7z
+
+# Compare two builds or write an update archive in the output directory.
+steam-press diff ./build-a ./build-b
+steam-press diff ./build-a ./build-b --archive --stem MyGame.patch
+
+# Any command can emit machine-readable JSON.
+steam-press doctor --json
 
 # Workshop item.
 steam-press workshop add 730 123456
@@ -117,13 +139,14 @@ steam-press workshop run --queue ~/.config/steam-press/queue.sswq
 cargo run -p steam-press-gui
 ```
 
-The window has four sections: **Library** (game queue), **Workshop** (workshop queue),
-**Depots** (depot search and synchronization) and **Settings** (engine, compressor, paths,
-credentials, template, theme). Games can be found by name in the Steam store, and every action
-uses a Lucide icon. Downloads run in a worker thread; the activity panel streams the live log
-and the active queue can be cancelled. Both queues are saved automatically and restored on
-launch. The GUI also checks for updates automatically and can install them from the Settings
-page.
+The window has five sections: **Library** (game queue), **Workshop** (workshop queue),
+**History** (finished, skipped, failed and cancelled jobs with their logs), **Depots** (depot
+search and synchronization) and **Settings** (engine, compressor, paths, credentials, template,
+theme). Games can be found by name in the Steam store, and every action uses a Lucide icon.
+Downloads run in a worker thread; the activity panel streams the live log and the active queue
+can be cancelled. Both queues and the history are saved automatically and restored on launch;
+history entries can open their output folder or be queued again. The GUI also checks for
+updates automatically and can install them from the Settings page.
 
 ## Configuration
 
@@ -133,7 +156,9 @@ page.
 - `STEAM_PRESS_HOME` overrides the whole layout.
 
 `settings.ini` keeps SuperSteamPacker's `[SSP]` keys (`compressor`, `customcompressoption`,
-`skipcompression`, `darkmode`, `uploadcrewmode`, `rinruusername`, `filehost`).
+`skipcompression`, `darkmode`, `uploadcrewmode`, `rinruusername`, `filehost`) and adds
+`verifyarchives` (test every archive after compression) and `diskmarginmb` (free-space margin
+kept during the preflight).
 
 Credentials are encrypted with AES-256-GCM using a locally generated key and stored in
 `credentials.bin` with mode `0600`. They are never logged and never passed on a command line
@@ -171,11 +196,12 @@ The test suite is offline: Steam responses come from fixtures and no account is 
 - No real Steam download was executed while developing this version (no account in the build
   environment). Download engines are covered through their generated scripts/arguments and
   log classifiers.
-- The GUI compiles but was not opened in the development environment (no display server).
-- Shared-depot handling is read-only: existing `SharedDepots` are preserved, but Steamworks
-  redistributable rows are not synthesized yet.
-- Windows and macOS are not validated, and automatic updates are Linux-only.
+- The GUI compiles and its pages are rendered in headless tests, but it was not opened in the
+  development environment (no display server).
+- Windows and macOS are compiled by CI but were not run locally; automatic updates install on
+  Linux and macOS, while Windows users get the archive URL to install manually.
 - Automatic updates require write access to the directory containing the GUI executable.
+- `diff` stages added and modified files; it does not model deletions in the update archive.
 
 ## Credits
 

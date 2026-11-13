@@ -1,11 +1,12 @@
 //! End-to-end pipeline: download, normalize, manifest, archive, release notes.
 
-use crate::acf::{self, AcfDepot, AcfJob};
+use crate::acf::{self, AcfDepot, AcfJob, SharedDepot};
 use crate::archive;
 use crate::config::{Paths, Settings};
 use crate::depots::DepotNames;
 use crate::downloader::{
-    self, process, Credentials, DepotSelector, DownloadError, DownloadRequest, DownloaderKind,
+    self, process, Credentials, DepotSelector, DownloadError, DownloadReport, DownloadRequest,
+    DownloaderKind,
 };
 use crate::events::{CancellationToken, EventSink, FinishStatus, PackEvent, Stage};
 use crate::naming;
@@ -13,6 +14,8 @@ use crate::queue::GameJob;
 use crate::steam::{self, DepotEntry, StoreInfo};
 use crate::template::{self, TemplateData, TemplateDepot};
 use chrono::{DateTime, Utc};
+use fs2::available_space;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::fs;
@@ -86,6 +89,7 @@ pub struct PackOptions {
     pub paths: Paths,
     pub downloader_kind: DownloaderKind,
     pub dry_run: bool,
+    pub fresh: bool,
     pub credentials: Credentials,
     pub depot_names: DepotNames,
 }
@@ -106,10 +110,86 @@ impl PackOptions {
             },
             downloader_kind: DownloaderKind::SteamCmd,
             dry_run: false,
+            fresh: false,
             credentials: Credentials::anonymous(),
             depot_names: DepotNames::default(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum CheckpointStage {
+    Downloaded,
+    Normalized,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Checkpoint {
+    stage: CheckpointStage,
+    content_dir: PathBuf,
+}
+
+fn checkpoint_path(work_dir: &Path) -> PathBuf {
+    work_dir.join(".steam-press-state.json")
+}
+
+fn read_checkpoint(work_dir: &Path) -> Option<(CheckpointStage, PathBuf)> {
+    let text = fs::read_to_string(checkpoint_path(work_dir)).ok()?;
+    serde_json::from_str::<Checkpoint>(&text)
+        .ok()
+        .map(|checkpoint| (checkpoint.stage, checkpoint.content_dir))
+}
+
+fn write_checkpoint(work_dir: &Path, stage: CheckpointStage, content_dir: &Path) -> io::Result<()> {
+    let text = serde_json::to_string(&Checkpoint {
+        stage,
+        content_dir: content_dir.to_path_buf(),
+    })
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    fs::write(checkpoint_path(work_dir), text)
+}
+
+fn estimated_download_bytes(preflight: &Preflight) -> Option<u64> {
+    let sizes: Vec<u64> = preflight
+        .depots
+        .iter()
+        .filter_map(|depot| depot.size_bytes)
+        .collect();
+    if sizes.is_empty() {
+        None
+    } else {
+        Some(sizes.into_iter().sum())
+    }
+}
+
+fn check_disk_space(
+    settings: &Settings,
+    preflight: &Preflight,
+    work_dir: &Path,
+    output_dir: &Path,
+) -> Result<Option<u64>, String> {
+    let Some(download) = estimated_download_bytes(preflight) else {
+        return Ok(None);
+    };
+    let margin = settings.disk_margin_mb.saturating_mul(1024 * 1024);
+    let required = download
+        .saturating_add(download / 10)
+        .saturating_add(256 * 1024 * 1024)
+        .saturating_add(margin);
+    for directory in [work_dir, output_dir] {
+        let free = available_space(directory)
+            .map_err(|error| format!("disk space check for {}: {error}", directory.display()))?;
+        if free < required {
+            return Err(format!(
+                "not enough disk space in {}: {:.1} GiB free, {:.1} GiB required",
+                directory.display(),
+                free as f64 / 1024.0 / 1024.0 / 1024.0,
+                required as f64 / 1024.0 / 1024.0 / 1024.0
+            ));
+        }
+    }
+    Ok(Some(required))
 }
 
 pub struct Packer {
@@ -262,7 +342,7 @@ impl Packer {
         });
 
         let work_dir = self.options.paths.work_dir.join(&stem);
-        if work_dir.exists() {
+        if self.options.fresh && work_dir.exists() {
             if let Err(error) = fs::remove_dir_all(&work_dir) {
                 return self.failed(
                     job,
@@ -272,6 +352,11 @@ impl Packer {
                     format!("work directory: {error}"),
                 );
             }
+        }
+        if work_dir.exists() {
+            sink.emit(PackEvent::Log(
+                "Resuming the existing work directory".to_string(),
+            ));
         }
         if let Err(error) = fs::create_dir_all(&work_dir) {
             return self.failed(
@@ -283,40 +368,75 @@ impl Packer {
             );
         }
 
-        let mut downloader =
-            downloader::create(self.options.downloader_kind, &self.options.settings);
-        if let Ok(mut slot) = self.active_cancel.lock() {
-            *slot = Some(downloader.cancel_token());
+        if let Err(message) =
+            check_disk_space(&self.options.settings, &preflight, &work_dir, &output_dir)
+        {
+            return self.failed(job, &stem, started, &sink, message);
         }
 
-        let request = DownloadRequest {
-            appid: job.appid.clone(),
-            platform: job.platform,
-            branch: job.branch.clone(),
-            branch_password: if job.branch_password.trim().is_empty() {
-                None
-            } else {
-                Some(job.branch_password.clone())
-            },
-            credentials: self.options.credentials.clone(),
-            work_dir: work_dir.clone(),
-            depots: preflight
-                .depots
-                .iter()
-                .map(|depot| DepotSelector {
-                    depot_id: depot.depot_id.clone(),
-                    manifest_id: Some(depot.manifest_id.clone()),
-                })
-                .collect(),
-            validate: true,
-        };
-
-        let report = match downloader.download(&request, &sink) {
-            Ok(report) => report,
-            Err(DownloadError::Cancelled) => {
-                return self.cancelled(job, stem, started, preflight, &sink);
+        let checkpoint = read_checkpoint(&work_dir);
+        let report = if let Some((CheckpointStage::Downloaded, content_dir)) = &checkpoint {
+            sink.emit(PackEvent::Log(
+                "Download already complete; skipping the download stage".to_string(),
+            ));
+            DownloadReport {
+                content_dir: content_dir.clone(),
+                app_manifest: None,
+                depots: Vec::new(),
+                build_id: String::new(),
             }
-            Err(error) => return self.failed(job, &stem, started, &sink, error.to_string()),
+        } else if let Some((CheckpointStage::Normalized, content_dir)) = &checkpoint {
+            sink.emit(PackEvent::Log(
+                "Download and cleanup already complete; resuming at manifests".to_string(),
+            ));
+            DownloadReport {
+                content_dir: content_dir.clone(),
+                app_manifest: None,
+                depots: Vec::new(),
+                build_id: String::new(),
+            }
+        } else {
+            let mut downloader =
+                downloader::create(self.options.downloader_kind, &self.options.settings);
+            if let Ok(mut slot) = self.active_cancel.lock() {
+                *slot = Some(downloader.cancel_token());
+            }
+
+            let request = DownloadRequest {
+                appid: job.appid.clone(),
+                platform: job.platform,
+                branch: job.branch.clone(),
+                branch_password: if job.branch_password.trim().is_empty() {
+                    None
+                } else {
+                    Some(job.branch_password.clone())
+                },
+                credentials: self.options.credentials.clone(),
+                work_dir: work_dir.clone(),
+                depots: preflight
+                    .depots
+                    .iter()
+                    .map(|depot| DepotSelector {
+                        depot_id: depot.depot_id.clone(),
+                        manifest_id: Some(depot.manifest_id.clone()),
+                    })
+                    .collect(),
+                validate: true,
+            };
+
+            let report = match downloader.download(&request, &sink) {
+                Ok(report) => report,
+                Err(DownloadError::Cancelled) => {
+                    return self.cancelled(job, stem, started, preflight, &sink);
+                }
+                Err(error) => return self.failed(job, &stem, started, &sink, error.to_string()),
+            };
+            if let Err(error) =
+                write_checkpoint(&work_dir, CheckpointStage::Downloaded, &report.content_dir)
+            {
+                sink.emit(PackEvent::Log(format!("Checkpoint warning: {error}")));
+            }
+            report
         };
 
         sink.emit(PackEvent::Stage {
@@ -326,8 +446,13 @@ impl Packer {
         });
 
         let temp = work_dir.join("temp");
-        if let Err(error) = normalize_content(&report.content_dir, &work_dir, &temp) {
-            return self.failed(job, &stem, started, &sink, format!("cleanup: {error}"));
+        if !matches!(checkpoint, Some((CheckpointStage::Normalized, _))) {
+            if let Err(error) = normalize_content(&report.content_dir, &work_dir, &temp) {
+                return self.failed(job, &stem, started, &sink, format!("cleanup: {error}"));
+            }
+            if let Err(error) = write_checkpoint(&work_dir, CheckpointStage::Normalized, &temp) {
+                sink.emit(PackEvent::Log(format!("Checkpoint warning: {error}")));
+            }
         }
 
         sink.emit(PackEvent::Stage {
@@ -338,43 +463,69 @@ impl Packer {
 
         let steamapps = temp.join("steamapps");
         let acf_path = steamapps.join(format!("appmanifest_{}.acf", job.appid));
+        let install_dir = install_dir_name(&preflight);
+        let install_path = steamapps.join("common").join(&install_dir);
+        let shared_depots: Vec<SharedDepot> = preflight
+            .depots
+            .iter()
+            .filter_map(|depot| {
+                depot.shared_owner.as_ref().map(|owner| SharedDepot {
+                    depot_id: depot.depot_id.clone(),
+                    owner_appid: owner.clone(),
+                    manifest_id: depot.manifest_id.clone(),
+                    size: depot.size_bytes.unwrap_or(0),
+                })
+            })
+            .collect();
+        let acf_job = AcfJob {
+            appid: job.appid.clone(),
+            name: preflight.name.clone(),
+            install_dir: install_dir.clone(),
+            build_id: preflight.build_id.clone(),
+            size_on_disk: directory_size(&install_path),
+            depots: preflight
+                .depots
+                .iter()
+                .filter(|depot| depot.shared_owner.is_none())
+                .map(|depot| AcfDepot {
+                    depot_id: depot.depot_id.clone(),
+                    manifest_id: depot.manifest_id.clone(),
+                    size: depot.size_bytes.unwrap_or(0),
+                    dlc_appid: depot.dlc_appid.clone(),
+                })
+                .collect(),
+            shared_depots: shared_depots.clone(),
+            install_scripts: Vec::new(),
+        };
+
         let manifest = if acf_path.is_file() {
             if let Err(error) = acf::rewrite_privacy_fields(&acf_path) {
                 return self.failed(job, &stem, started, &sink, format!("manifest: {error}"));
             }
-            match acf::read_manifest(&acf_path) {
+            match acf::validate_manifest(&acf_path) {
                 Ok(manifest) => Some(manifest),
                 Err(error) => {
                     return self.failed(job, &stem, started, &sink, format!("manifest: {error}"))
                 }
             }
         } else {
-            let install_dir = install_dir_name(&preflight);
-            let install_path = steamapps.join("common").join(&install_dir);
-            let acf_job = AcfJob {
-                appid: job.appid.clone(),
-                name: preflight.name.clone(),
-                install_dir: install_dir.clone(),
-                build_id: preflight.build_id.clone(),
-                size_on_disk: directory_size(&install_path),
-                depots: preflight
-                    .depots
-                    .iter()
-                    .map(|depot| AcfDepot {
-                        depot_id: depot.depot_id.clone(),
-                        manifest_id: depot.manifest_id.clone(),
-                        size: 0,
-                        dlc_appid: depot.dlc_appid.clone(),
-                    })
-                    .collect(),
-                shared_depots: Vec::new(),
-                install_scripts: Vec::new(),
-            };
             if let Err(error) = acf::write_acf(&steamapps, &acf_job) {
                 return self.failed(job, &stem, started, &sink, format!("manifest: {error}"));
             }
             acf::read_manifest(&acf_path).ok()
         };
+
+        if !shared_depots.is_empty() {
+            if let Err(error) = acf::write_shared_acf(&steamapps, &acf_job) {
+                return self.failed(
+                    job,
+                    &stem,
+                    started,
+                    &sink,
+                    format!("shared manifest: {error}"),
+                );
+            }
+        }
 
         let game_name = manifest
             .as_ref()
@@ -649,6 +800,11 @@ pub(crate) fn compress_directory(
     archive::finalize_volumes(output_dir, stem, compressor)
         .map_err(|error| PipelineError::Archive(format!("volumes: {error}")))?;
 
+    if settings.verify_archives {
+        archive::verify_archive(settings, output_dir, stem, compressor)
+            .map_err(PipelineError::Archive)?;
+    }
+
     match archive::write_checksums(output_dir, stem, compressor) {
         Ok(Some(manifest)) => sink.emit(PackEvent::Log(format!(
             "Checksums written: {}",
@@ -757,6 +913,8 @@ mod tests {
                 name: "Balatro".into(),
                 manifest_id: "4851806656204679952".into(),
                 dlc_appid: None,
+                size_bytes: Some(1024),
+                shared_owner: None,
             }],
             store: None,
         })
@@ -788,6 +946,28 @@ mod tests {
             .output
             .unwrap()
             .ends_with("Balatro.Build.18674832.Linux64.public.7z"));
+    }
+
+    #[test]
+    fn estimates_download_size_and_blocks_an_impossible_disk_request() {
+        let dir = temp_dir("pack-disk");
+        let preflight = fixture_preflight(&GameJob::new(Platform::Linux64, "2379780")).unwrap();
+        assert_eq!(estimated_download_bytes(&preflight), Some(1024));
+        let settings = Settings {
+            disk_margin_mb: u64::MAX / 2,
+            ..Default::default()
+        };
+        let result = check_disk_space(&settings, &preflight, &dir, &dir);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn checkpoints_round_trip_in_the_work_directory() {
+        let dir = temp_dir("pack-checkpoint");
+        write_checkpoint(&dir, CheckpointStage::Downloaded, &dir.join("steamapps")).unwrap();
+        let (stage, content) = read_checkpoint(&dir).unwrap();
+        assert_eq!(stage, CheckpointStage::Downloaded);
+        assert_eq!(content, dir.join("steamapps"));
     }
 
     #[test]
