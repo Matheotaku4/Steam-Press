@@ -18,8 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.value }}
-      cli_publish: ${{ steps.release.outputs.cli_publish }}
-      gui_publish: ${{ steps.release.outputs.gui_publish }}
+      publish: ${{ steps.release.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
       - name: Read crate version
@@ -31,93 +30,72 @@ jobs:
             exit 1
           fi
           echo "value=$version" >> "$GITHUB_OUTPUT"
-      - name: Check existing releases
+      - name: Check existing release
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${{ steps.version.outputs.value }}"
-          if gh release view "cli-v${version}" >/dev/null 2>&1; then
-            echo "cli_publish=false" >> "$GITHUB_OUTPUT"
-            echo "cli-v${version} is already published."
+          if gh release view "v${version}" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "v${version} is already published."
           else
-            echo "cli_publish=true" >> "$GITHUB_OUTPUT"
-          fi
-          if gh release view "gui-v${version}" >/dev/null 2>&1; then
-            echo "gui_publish=false" >> "$GITHUB_OUTPUT"
-            echo "gui-v${version} is already published."
-          else
-            echo "gui_publish=true" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
-  linux-cli:
+  linux-x86_64:
     needs: prepare
-    if: needs.prepare.outputs.cli_publish == 'true'
+    if: needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - name: Build CLI
-        run: cargo build --release --locked -p steam-press-cli
-      - name: Package CLI
+      - name: Build CLIs and GUI
+        run: cargo build --release --locked -p steam-press-cli -p steam-press-gui
+      - name: Package
         shell: bash
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          name="steam-press-cli-${VERSION}-linux-x86_64"
-          mkdir -p "dist/${name}/docs"
-          cp target/release/steam-press "dist/${name}/"
-          cp README.md "dist/${name}/"
-          cp docs/usage.md "dist/${name}/docs/"
-          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
-          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
-      - name: Publish CLI release
+          version="${VERSION}"
+          mkdir -p dist
+
+          combined="steam-press-${version}-linux-x86_64"
+          mkdir -p "dist/${combined}/docs"
+          cp target/release/steam-press target/release/steam-press-gui "dist/${combined}/"
+          cp README.md "dist/${combined}/"
+          cp docs/usage.md "dist/${combined}/docs/"
+          tar -C dist -czf "dist/${combined}.tar.gz" "${combined}"
+
+          cli="steam-press-cli-${version}-linux-x86_64"
+          mkdir -p "dist/${cli}/docs"
+          cp target/release/steam-press "dist/${cli}/"
+          cp README.md "dist/${cli}/"
+          cp docs/usage.md "dist/${cli}/docs/"
+          tar -C dist -czf "dist/${cli}.tar.gz" "${cli}"
+
+          gui="steam-press-gui-${version}-linux-x86_64"
+          mkdir -p "dist/${gui}/docs"
+          cp target/release/steam-press-gui "dist/${gui}/"
+          cp README.md "dist/${gui}/"
+          cp docs/usage.md "dist/${gui}/docs/"
+          tar -C dist -czf "dist/${gui}.tar.gz" "${gui}"
+
+          (cd dist && sha256sum "${combined}.tar.gz" > "${combined}.tar.gz.sha256" \
+            && sha256sum "${cli}.tar.gz" > "${cli}.tar.gz.sha256" \
+            && sha256sum "${gui}.tar.gz" > "${gui}.tar.gz.sha256" \
+            && sha256sum ./*.tar.gz > SHA256SUMS)
+      - name: Publish GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           version="${{ needs.prepare.outputs.version }}"
-          name="steam-press-cli-${version}-linux-x86_64"
-          gh release create "cli-v${version}" \
-            "dist/${name}.tar.gz" \
-            "dist/${name}.tar.gz.sha256" \
-            --title "Steam Press CLI v${version}" \
-            --generate-notes
-
-  linux-gui:
-    needs: prepare
-    if: needs.prepare.outputs.gui_publish == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      - name: Build GUI
-        run: cargo build --release --locked -p steam-press-gui
-      - name: Package GUI
-        shell: bash
-        env:
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -euo pipefail
-          name="steam-press-gui-${VERSION}-linux-x86_64"
-          mkdir -p "dist/${name}/docs"
-          cp target/release/steam-press-gui "dist/${name}/"
-          cp README.md "dist/${name}/"
-          cp docs/usage.md "dist/${name}/docs/"
-          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
-          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
-      - name: Publish GUI release
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          version="${{ needs.prepare.outputs.version }}"
-          name="steam-press-gui-${version}-linux-x86_64"
-          gh release create "gui-v${version}" \
-            "dist/${name}.tar.gz" \
-            "dist/${name}.tar.gz.sha256" \
-            --title "Steam Press GUI v${version}" \
+          gh release create "v${version}" \
+            dist/*.tar.gz \
+            dist/*.tar.gz.sha256 \
+            dist/SHA256SUMS \
+            --title "Steam Press v${version}" \
             --generate-notes

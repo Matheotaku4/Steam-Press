@@ -1,7 +1,7 @@
 use crate::support;
 use crate::{
-    Cli, Command, DepotsAction, InfoArgs, LoginArgs, PackArgs, QueueAction, TemplateAction,
-    WorkshopAction,
+    Cli, Command, DepotsAction, InfoArgs, LoginArgs, PackArgs, QueueAction, SearchArgs,
+    TemplateAction, WorkshopAction,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -25,7 +25,7 @@ pub fn dispatch(cli: Cli) -> Result<ExitCode, String> {
         Command::Doctor => doctor(&cli),
         Command::Login(args) => login(&cli, args),
         Command::Info(args) => info(&cli, args),
-        Command::Search { term } => search(term),
+        Command::Search(args) => search(args),
         Command::Queue { action } => queue(&cli, action),
         Command::Pack(args) => pack(&cli, args),
         Command::Workshop { action } => workshop(&cli, action),
@@ -109,6 +109,32 @@ fn login(cli: &Cli, args: &LoginArgs) -> Result<ExitCode, String> {
 fn info(cli: &Cli, args: &InfoArgs) -> Result<ExitCode, String> {
     let (_paths, _settings) = support::load_settings(cli)?;
     let app = steam::fetch_app_info(&args.appid, &args.branch)?;
+    if args.json {
+        let store = steam::fetch_store_info(&args.appid).ok();
+        let payload = serde_json::json!({
+            "appid": app.appid,
+            "name": app.name,
+            "installDir": app.install_dir,
+            "buildId": app.build_id,
+            "buildTime": app.build_time.map(template::format_utc_datetime),
+            "depots": app.depots.iter().map(|depot| serde_json::json!({
+                "depotId": depot.depot_id,
+                "name": depot.name,
+                "manifestId": depot.manifest_id,
+                "dlcAppid": depot.dlc_appid,
+            })).collect::<Vec<_>>(),
+            "store": store.map(|store| serde_json::json!({
+                "name": store.name,
+                "shortDescription": store.short_description,
+                "website": store.website,
+            })),
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).map_err(|error| format!("JSON: {error}"))?
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
     println!("{} ({})", app.name, app.appid);
     println!(
         "Build   : {} - {}",
@@ -143,12 +169,23 @@ fn info(cli: &Cli, args: &InfoArgs) -> Result<ExitCode, String> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn search(term: &str) -> Result<ExitCode, String> {
-    let term = term.trim();
+fn search(args: &SearchArgs) -> Result<ExitCode, String> {
+    let term = args.term.trim();
     if term.chars().count() < 2 {
         return Err("search term must be at least two characters".to_string());
     }
     let results = steam::search_store(term)?;
+    if args.json {
+        let payload: Vec<_> = results
+            .iter()
+            .map(|item| serde_json::json!({"appid": item.appid, "name": item.name}))
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).map_err(|error| format!("JSON: {error}"))?
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
     if results.is_empty() {
         println!("No games found for \"{term}\".");
         return Ok(ExitCode::SUCCESS);
@@ -329,6 +366,10 @@ fn pack(cli: &Cli, args: &PackArgs) -> Result<ExitCode, String> {
             PackStatus::Completed | PackStatus::Skipped => {
                 if let Some(output) = &outcome.output {
                     println!("{}", output.display());
+                    let checksum = output.with_file_name(format!("{}.sha256", outcome.stem));
+                    if checksum.is_file() {
+                        println!("Checksum: {}", checksum.display());
+                    }
                 }
                 println!(
                     "{} — {:?} en {:.1}s",
@@ -443,6 +484,12 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
                 let packer = WorkshopPacker::new(options.clone());
                 let outcome = packer.run(job, sink.clone());
                 println!("{outcome}");
+                if let Some(output) = &outcome.output {
+                    let checksum = output.with_file_name(format!("{}.sha256", outcome.stem));
+                    if checksum.is_file() {
+                        println!("Checksum: {}", checksum.display());
+                    }
+                }
                 if matches!(
                     outcome.status,
                     PackStatus::Failed(_) | PackStatus::Cancelled

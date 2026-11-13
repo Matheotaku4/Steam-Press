@@ -1,4 +1,4 @@
-//! Self-updater for the GUI, backed by `gui-v*` GitHub releases.
+//! Self-updater for the GUI, backed by GitHub releases containing a GUI archive.
 
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
@@ -9,7 +9,6 @@ use std::time::Duration;
 
 const OWNER: &str = "Matheotaku4";
 const REPO: &str = "Steam-Press";
-const TAG_PREFIX: &str = "gui-v";
 const BIN_NAME: &str = "steam-press-gui";
 const USER_AGENT: &str = "SteamPress-GUI-Updater";
 
@@ -90,7 +89,7 @@ fn select_update(tags: &[String], current: &str) -> Result<Option<AvailableUpdat
     let mut candidates = Vec::new();
 
     for tag in tags {
-        let Some(version) = tag.strip_prefix(TAG_PREFIX) else {
+        let Some(version) = release_version(tag) else {
             continue;
         };
         let Some(parsed) = parse_version(version) else {
@@ -112,6 +111,10 @@ fn select_update(tags: &[String], current: &str) -> Result<Option<AvailableUpdat
 
     candidates.sort_by_key(|update| parse_version(&update.version).unwrap_or((0, 0, 0)));
     Ok(candidates.pop())
+}
+
+fn release_version(tag: &str) -> Option<&str> {
+    tag.strip_prefix("gui-v").or_else(|| tag.strip_prefix('v'))
 }
 
 fn parse_version(value: &str) -> Option<(u64, u64, u64)> {
@@ -261,28 +264,28 @@ mod tests {
     use super::*;
 
     const ATOM: &str = r#"<feed>
-        <entry><link href="https://github.com/Matheotaku4/Steam-Press/releases/tag/gui-v0.3.2"/></entry>
         <entry><link href="https://github.com/Matheotaku4/Steam-Press/releases/tag/gui-v0.4.0"/></entry>
+        <entry><link href="https://github.com/Matheotaku4/Steam-Press/releases/tag/v0.5.0"/></entry>
         <entry><link href="https://github.com/Matheotaku4/Steam-Press/releases/tag/cli-v0.9.0"/></entry>
     </feed>"#;
 
     #[test]
     fn selects_the_newest_gui_release() {
         let tags = parse_release_tags(ATOM);
-        let update = select_update(&tags, "0.3.1").unwrap().unwrap();
-        assert_eq!(update.version, "0.4.0");
-        assert_eq!(update.tag, "gui-v0.4.0");
+        let update = select_update(&tags, "0.4.0").unwrap().unwrap();
+        assert_eq!(update.version, "0.5.0");
+        assert_eq!(update.tag, "v0.5.0");
         assert!(update
             .archive_url
-            .ends_with("releases/download/gui-v0.4.0/steam-press-gui-0.4.0-linux-x86_64.tar.gz"));
+            .ends_with("releases/download/v0.5.0/steam-press-gui-0.5.0-linux-x86_64.tar.gz"));
         assert!(update.checksum_url.ends_with(".tar.gz.sha256"));
     }
 
     #[test]
     fn ignores_old_and_non_gui_entries() {
         let tags = parse_release_tags(ATOM);
-        assert!(select_update(&tags, "0.4.0").unwrap().is_none());
-        assert!(select_update(&tags, "0.4.1").unwrap().is_none());
+        assert!(select_update(&tags, "0.5.0").unwrap().is_none());
+        assert!(select_update(&tags, "0.5.1").unwrap().is_none());
     }
 
     #[test]
@@ -293,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a published gui-v release"]
+    #[ignore = "requires a published GUI release"]
     fn finds_the_published_gui_release() {
         let update = check_for_update("0.3.1").unwrap().unwrap();
         assert_eq!(update.version, env!("CARGO_PKG_VERSION"));

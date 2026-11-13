@@ -3,8 +3,9 @@
 use crate::compressor::Compressor;
 use crate::config::Settings;
 use crate::tooling;
+use sha2::{Digest, Sha256};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 impl Compressor {
@@ -74,6 +75,89 @@ pub fn compressor_binary(compressor: Compressor, settings: &Settings) -> Result<
 
 pub fn archive_path(directory: &Path, stem: &str, compressor: Compressor) -> PathBuf {
     directory.join(format!("{stem}.{}", compressor.extension()))
+}
+
+pub fn checksum_manifest_path(directory: &Path, stem: &str) -> PathBuf {
+    directory.join(format!("{stem}.sha256"))
+}
+
+/// Lists the archive files for a stem, including split volumes.
+pub fn archive_parts(
+    directory: &Path,
+    stem: &str,
+    compressor: Compressor,
+) -> io::Result<Vec<PathBuf>> {
+    if !directory.is_dir() {
+        return Ok(Vec::new());
+    }
+    let prefix = format!("{stem}.");
+    let mut parts = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        if !entry.path().is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let is_archive = name.starts_with(&prefix)
+            && match compressor {
+                Compressor::SevenZip => {
+                    name.ends_with(".7z")
+                        || (name.contains(".7z.")
+                            && name
+                                .rsplit('.')
+                                .next()
+                                .map(|suffix| suffix.chars().all(|c| c.is_ascii_digit()))
+                                .unwrap_or(false))
+                }
+                Compressor::Rar => {
+                    name.ends_with(".rar")
+                        && (name == format!("{stem}.rar")
+                            || name.starts_with(&format!("{stem}.part")))
+                }
+            };
+        if is_archive {
+            parts.push(entry.path());
+        }
+    }
+    parts.sort();
+    Ok(parts)
+}
+
+/// Writes a `sha256sum`-compatible manifest for every archive part.
+pub fn write_checksums(
+    directory: &Path,
+    stem: &str,
+    compressor: Compressor,
+) -> io::Result<Option<PathBuf>> {
+    let parts = archive_parts(directory, stem, compressor)?;
+    if parts.is_empty() {
+        return Ok(None);
+    }
+    let mut content = String::new();
+    for part in &parts {
+        let name = part
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        content.push_str(&format!("{}  {}\n", sha256_file(part)?, name));
+    }
+    let manifest = checksum_manifest_path(directory, stem);
+    fs::write(&manifest, content)?;
+    Ok(Some(manifest))
+}
+
+fn sha256_file(path: &Path) -> io::Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 /// Whether any archive part for this stem already exists.
@@ -168,6 +252,26 @@ mod tests {
 
         fs::write(dir.join(format!("{stem}.rar")), b"x").unwrap();
         assert!(archive_exists(&dir, stem, Compressor::Rar));
+    }
+
+    #[test]
+    fn writes_checksums_for_split_archives() {
+        let dir = temp_dir("archive-checksums");
+        let stem = "Game.Build.1.Linux64.public";
+        fs::write(dir.join(format!("{stem}.7z.001")), b"first").unwrap();
+        fs::write(dir.join(format!("{stem}.7z.002")), b"second").unwrap();
+        fs::write(dir.join("other.7z.001"), b"ignored").unwrap();
+
+        let parts = archive_parts(&dir, stem, Compressor::SevenZip).unwrap();
+        assert_eq!(parts.len(), 2);
+        let manifest = write_checksums(&dir, stem, Compressor::SevenZip)
+            .unwrap()
+            .unwrap();
+        let content = fs::read_to_string(&manifest).unwrap();
+        assert_eq!(content.lines().count(), 2);
+        assert!(content.contains(&format!("{stem}.7z.001")));
+        assert!(content.contains(&format!("{stem}.7z.002")));
+        assert!(content.lines().all(|line| line.len() > 70));
     }
 
     #[test]

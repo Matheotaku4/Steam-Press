@@ -1,6 +1,6 @@
 [package]
 name = "steam-press-core"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 license = "MIT"
 description = "Core logic for Steam Press: Steam depot packing, manifests and release templates"
@@ -12,4 +12,5 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 chrono = { version = "0.4", features = ["serde"] }
 aes-gcm = "0.10"
 base64 = "0.22"
+sha2 = "0.10"
 rand = "0.8"

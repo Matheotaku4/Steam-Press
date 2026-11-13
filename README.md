@@ -13,8 +13,8 @@ macOS support can be added later.
 ## Features
 
 - Game queue with platform, branch and protected-branch support.
-- Search the Steam store by name to fill an App ID, from the CLI or the GUI (with Lucide
-  icons throughout).
+- Search the Steam store by name to fill an App ID, from the CLI (text or JSON) or the GUI
+  (with Lucide icons throughout).
 - Workshop queue (`workshop_download_item`).
 - Two download engines behind one abstraction: **SteamCMD** (default) and **DepotDownloader**.
 - `.acf` reading, privacy sanitizing (`LastOwner`/`LauncherPath` set to `"0"`) and full
@@ -28,7 +28,9 @@ macOS support can be added later.
   [SteamDepotNames](https://github.com/Masquerade64/SteamDepotNames).
 - Cancellation during download or compression; partial archives are kept.
 - Encrypted local credential vault (AES-256-GCM).
-- Automatic GUI updates from `gui-v*` releases, with SHA-256 verification and restart.
+- GUI queues are saved automatically and restored at the next launch.
+- `sha256sum`-compatible checksum manifests for every packed archive.
+- Automatic GUI updates from the main `v*` releases, with SHA-256 verification and restart.
 
 ## Architecture
 
@@ -56,21 +58,24 @@ Binaries land in `target/release/steam-press` and `target/release/steam-press-gu
 
 ## Releases
 
-GitHub Actions publishes two independent Linux releases when the version in
-`crates/steam-press-core/Cargo.toml` has no matching release yet:
+GitHub Actions publishes one Linux release when the version in
+`crates/steam-press-core/Cargo.toml` has no matching release yet. Each `v<version>` release
+contains three archives plus checksums:
 
-- `cli-v<version>` contains `steam-press`, the README and the usage guide;
-- `gui-v<version>` contains `steam-press-gui`, the README and the usage guide.
+- `steam-press-<version>-linux-x86_64.tar.gz` with both binaries, the README and the guide;
+- `steam-press-cli-<version>-linux-x86_64.tar.gz` with the CLI only;
+- `steam-press-gui-<version>-linux-x86_64.tar.gz` with the GUI only.
 
-Both provide a `.tar.gz` archive and a `.sha256` checksum. To publish them from a tag instead:
+Every archive has a `.sha256` file, and `SHA256SUMS` covers all three. To publish from a tag
+instead:
 
 ```bash
-git tag -a v0.4.0 -m "Steam Press 0.4.0"
-git push origin v0.4.0
+git tag -a v0.5.0 -m "Steam Press 0.5.0"
+git push origin v0.5.0
 ```
 
-The GUI checks `gui-v*` releases on startup and from **Settings > Updates**. It downloads the
-matching archive, verifies its SHA-256 checksum, replaces the running executable and restarts.
+The GUI checks the main `v*` releases on startup and from **Settings > Updates**. It downloads
+the GUI archive, verifies its SHA-256 checksum, replaces the running executable and restarts.
 The `CI` workflow runs formatting, Clippy and the test suite on every push to `main` and on
 pull requests.
 
@@ -80,11 +85,13 @@ pull requests.
 # Save Steam credentials (encrypted locally), or use --anonymous later.
 steam-press login
 
-# Find a game by name.
+# Find a game by name (add --json for scripts).
 steam-press search "half-life"
+steam-press search "half-life" --json
 
 # Inspect an app.
 steam-press info 2379780
+steam-press info 2379780 --json
 
 # Synchronize depot names.
 steam-press depots sync
@@ -114,8 +121,9 @@ The window has four sections: **Library** (game queue), **Workshop** (workshop q
 **Depots** (depot search and synchronization) and **Settings** (engine, compressor, paths,
 credentials, template, theme). Games can be found by name in the Steam store, and every action
 uses a Lucide icon. Downloads run in a worker thread; the activity panel streams the live log
-and the active queue can be cancelled. The GUI also checks for updates automatically and can
-install them from the Settings page.
+and the active queue can be cancelled. Both queues are saved automatically and restored on
+launch. The GUI also checks for updates automatically and can install them from the Settings
+page.
 
 ## Configuration
 
@@ -167,6 +175,7 @@ The test suite is offline: Steam responses come from fixtures and no account is 
 - Shared-depot handling is read-only: existing `SharedDepots` are preserved, but Steamworks
   redistributable rows are not synthesized yet.
 - Windows and macOS are not validated, and automatic updates are Linux-only.
+- Automatic updates require write access to the directory containing the GUI executable.
 
 ## Credits
 

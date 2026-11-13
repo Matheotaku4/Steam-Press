@@ -649,6 +649,15 @@ pub(crate) fn compress_directory(
     archive::finalize_volumes(output_dir, stem, compressor)
         .map_err(|error| PipelineError::Archive(format!("volumes: {error}")))?;
 
+    match archive::write_checksums(output_dir, stem, compressor) {
+        Ok(Some(manifest)) => sink.emit(PackEvent::Log(format!(
+            "Checksums written: {}",
+            manifest.display()
+        ))),
+        Ok(None) => {}
+        Err(error) => sink.emit(PackEvent::Log(format!("Checksum warning: {error}"))),
+    }
+
     Ok(CompressOutcome::Done(target))
 }
 

@@ -41,10 +41,7 @@ pub enum Command {
     /// Show Steam metadata for an app.
     Info(InfoArgs),
     /// Search the Steam store by game name.
-    Search {
-        /// Game name to search for.
-        term: String,
-    },
+    Search(SearchArgs),
     /// Manage game queue files.
     Queue {
         #[command(subcommand)]
@@ -119,6 +116,18 @@ pub struct InfoArgs {
     pub appid: String,
     #[arg(long, default_value = "public")]
     pub branch: String,
+    /// Print a machine-readable JSON document.
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub struct SearchArgs {
+    /// Game name to search for.
+    pub term: String,
+    /// Print a machine-readable JSON array.
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -272,9 +281,13 @@ mod tests {
 
     #[test]
     fn search_takes_a_game_name() {
-        let matches = Cli::try_parse_from(["steam-press", "search", "half-life"]).unwrap();
+        let matches =
+            Cli::try_parse_from(["steam-press", "search", "half-life", "--json"]).unwrap();
         match matches.command {
-            Command::Search { term } => assert_eq!(term, "half-life"),
+            Command::Search(args) => {
+                assert_eq!(args.term, "half-life");
+                assert!(args.json);
+            }
             _ => panic!("expected search"),
         }
     }

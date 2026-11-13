@@ -304,24 +304,30 @@ impl SteamPressApp {
         let rar_text = path_text(settings.rar_path.as_ref());
         let template_text = path_text(settings.template.as_ref());
         let custom_options_text = settings.custom_compress_options.clone().unwrap_or_default();
+        let queue_file = paths.config_dir.join("queue.sspq");
+        let workshop_file = paths.config_dir.join("queue.sswq");
+        let mut game_queue = GameQueue::default();
+        if let Ok(load) = steam_press_core::queue::load_game_queue(&queue_file) {
+            for job in load.jobs {
+                game_queue.push(job);
+            }
+        }
+        let mut workshop_queue = WorkshopQueue::default();
+        if let Ok(load) = steam_press_core::queue::load_workshop_queue(&workshop_file) {
+            for job in load.jobs {
+                workshop_queue.push(job);
+            }
+        }
 
         Self {
-            queue_io_path: paths
-                .config_dir
-                .join("queue.sspq")
-                .to_string_lossy()
-                .into_owned(),
-            workshop_io_path: paths
-                .config_dir
-                .join("queue.sswq")
-                .to_string_lossy()
-                .into_owned(),
+            queue_io_path: queue_file.to_string_lossy().into_owned(),
+            workshop_io_path: workshop_file.to_string_lossy().into_owned(),
             paths,
             settings,
             downloader_kind: DownloaderKind::SteamCmd,
             tab: Tab::Library,
-            game_queue: GameQueue::default(),
-            workshop_queue: WorkshopQueue::default(),
+            game_queue,
+            workshop_queue,
             game_form: GameForm::default(),
             workshop_form: WorkshopForm::default(),
             login,
@@ -851,6 +857,20 @@ impl SteamPressApp {
         }
     }
 
+    fn persist_queues(&mut self) {
+        if let Err(error) =
+            steam_press_core::queue::save_game_queue(&self.queue_io_path, &self.game_queue.jobs())
+        {
+            self.error = Some(format!("Queue save: {error}"));
+        }
+        if let Err(error) = steam_press_core::queue::save_workshop_queue(
+            &self.workshop_io_path,
+            &self.workshop_queue.jobs(),
+        ) {
+            self.error = Some(format!("Queue save: {error}"));
+        }
+    }
+
     fn import_games(&mut self) {
         match steam_press_core::queue::load_game_queue(&self.queue_io_path) {
             Ok(load) => {
@@ -864,6 +884,7 @@ impl SteamPressApp {
                 for warning in load.warnings {
                     self.push_log(LogLevel::Warning, format!("warning: {warning}"));
                 }
+                self.persist_queues();
             }
             Err(error) => self.error = Some(error),
         }
@@ -887,6 +908,7 @@ impl SteamPressApp {
                     }
                 }
                 self.status_message = Some(format!("{added} item(s) imported."));
+                self.persist_queues();
             }
             Err(error) => self.error = Some(error),
         }
@@ -1435,6 +1457,7 @@ impl SteamPressApp {
                             self.game_search_error = None;
                             self.error = None;
                             self.status_message = Some("Game added to the queue.".to_string());
+                            self.persist_queues();
                         } else {
                             self.error = Some("That job is already queued.".to_string());
                         }
@@ -1461,6 +1484,7 @@ impl SteamPressApp {
                         .clicked()
                     {
                         self.game_queue.clear();
+                        self.persist_queues();
                     }
                     ui.label(
                         egui::RichText::new(format!("{} jobs", self.game_queue.len()))
@@ -1498,6 +1522,7 @@ impl SteamPressApp {
                             self.game_queue.remove(index);
                         }
                     }
+                    self.persist_queues();
                 }
             }
             ui.add_space(10.0);
@@ -1590,6 +1615,7 @@ impl SteamPressApp {
                             self.error = None;
                             self.status_message =
                                 Some("Workshop item added to the queue.".to_string());
+                            self.persist_queues();
                         }
                         Ok(()) => {
                             self.error = Some("That item is already queued.".to_string());
@@ -1616,6 +1642,7 @@ impl SteamPressApp {
                         .clicked()
                     {
                         self.workshop_queue.clear();
+                        self.persist_queues();
                     }
                     ui.label(
                         egui::RichText::new(format!("{} items", self.workshop_queue.len()))
@@ -1654,6 +1681,7 @@ impl SteamPressApp {
                             self.workshop_queue.remove(index);
                         }
                     }
+                    self.persist_queues();
                 }
             }
             ui.add_space(10.0);
@@ -2001,7 +2029,7 @@ impl SteamPressApp {
                         ui,
                         palette,
                         "Updates",
-                        "Checks the gui-v releases on GitHub.",
+                        "Checks GitHub releases for a newer GUI build.",
                     );
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2681,6 +2709,43 @@ mod tests {
             app.draw(context);
         });
         assert_eq!(app.log.len(), 2000);
+    }
+
+    #[test]
+    fn restores_queues_saved_in_the_config_dir() {
+        let root =
+            std::env::temp_dir().join(format!("steam-press-gui-restore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let paths = Paths::under(&root);
+        paths.ensure().unwrap();
+        steam_press_core::queue::save_game_queue(
+            paths.config_dir.join("queue.sspq"),
+            &[GameJob::new(Platform::Linux64, "2379780")],
+        )
+        .unwrap();
+        steam_press_core::queue::save_workshop_queue(
+            paths.config_dir.join("queue.sswq"),
+            &[WorkshopJob::new("730", "123456")],
+        )
+        .unwrap();
+
+        let app = SteamPressApp::for_tests(&root);
+        assert_eq!(app.game_queue.len(), 1);
+        assert_eq!(app.workshop_queue.len(), 1);
+        assert_eq!(app.game_queue.entries()[0].job.appid, "2379780");
+    }
+
+    #[test]
+    fn persists_queue_changes_to_the_configured_file() {
+        let mut app = test_app("queue-persist");
+        app.game_queue
+            .push(GameJob::new(Platform::Linux64, "2379780"));
+        app.workshop_queue.push(WorkshopJob::new("730", "42"));
+        app.persist_queues();
+        let games = steam_press_core::queue::load_game_queue(&app.queue_io_path).unwrap();
+        let workshop = steam_press_core::queue::load_workshop_queue(&app.workshop_io_path).unwrap();
+        assert_eq!(games.jobs.len(), 1);
+        assert_eq!(workshop.jobs.len(), 1);
     }
 
     #[test]

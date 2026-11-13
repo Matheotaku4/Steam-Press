@@ -37,9 +37,12 @@ Pour retrouver un AppID à partir du nom du jeu :
 
 ```bash
 steam-press search "half-life"
+steam-press search "half-life" --json
+steam-press info 2379780 --json
 ```
 
-La commande interroge le Steam Store et affiche l'AppID et le nom des résultats.
+La commande interroge le Steam Store et affiche l'AppID et le nom des résultats. `--json`
+produit une sortie exploitable par un script, pour `search` comme pour `info`.
 
 ```bash
 steam-press queue add 2379780 --os lin64 --branch public
@@ -88,7 +91,8 @@ Les options 7-Zip par défaut sont `-mx9 -sdel -p<mot de passe> -mhe=on -v5g`.
 Si un seul volume `.7z.001` est produit, il est renommé en `.7z`.
 
 Un job dont l'archive existe déjà est ignoré. `--compressor none` équivaut à
-`--no-compress`.
+`--no-compress`. Après compression, un manifeste `<Jeu>...sha256` est écrit à côté des
+volumes ; il est compatible avec `sha256sum -c`.
 
 ## 5. Atelier
 
@@ -166,11 +170,12 @@ key=<clé locale>
 
 ## 9. Mises à jour de la GUI
 
-La GUI vérifie automatiquement les releases `gui-v*` au démarrage. La page **Settings >
-Updates** affiche la version courante, permet de relancer la vérification et d'installer une
+La GUI vérifie automatiquement les releases principales `v*` au démarrage. La page **Settings
+> Updates** affiche la version courante, permet de relancer la vérification et d'installer une
 mise à jour. L'archive est téléchargée depuis GitHub, son empreinte SHA-256 est vérifiée, puis
 l'exécutable est remplacé et l'application redémarre. Les mises à jour automatiques sont
-limitées à Linux.
+limitées à Linux et nécessitent un accès en écriture au dossier de l'exécutable. Les files
+Library et Workshop sont sauvegardées automatiquement et restaurées au lancement suivant.
 
 ## 10. Erreurs fréquentes
 
