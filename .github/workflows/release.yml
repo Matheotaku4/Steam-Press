@@ -1,0 +1,43 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-x86_64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binaries
+        run: cargo build --release --locked -p steam-press-cli -p steam-press-gui
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          name="steam-press-${version}-linux-x86_64"
+          mkdir -p "dist/${name}/docs"
+          cp target/release/steam-press target/release/steam-press-gui "dist/${name}/"
+          cp README.md "dist/${name}/"
+          cp docs/usage.md "dist/${name}/docs/"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          echo "ASSET_NAME=${name}" >> "$GITHUB_ENV"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/${ASSET_NAME}.tar.gz" \
+            "dist/${ASSET_NAME}.tar.gz.sha256" \
+            --title "Steam Press ${GITHUB_REF_NAME}" \
+            --generate-notes

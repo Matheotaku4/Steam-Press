@@ -51,6 +51,19 @@ cargo build --release -p steam-press-cli -p steam-press-gui
 
 Binaries land in `target/release/steam-press` and `target/release/steam-press-gui`.
 
+## Releases
+
+GitHub Actions builds and publishes the Linux binaries when a `v*` tag is pushed:
+
+```bash
+git tag -a v0.1.0 -m "Steam Press 0.1.0"
+git push origin v0.1.0
+```
+
+Each release contains `steam-press`, `steam-press-gui`, the README, the usage guide and a
+`.sha256` checksum. The `CI` workflow runs formatting, Clippy and the test suite on every
+push to `main` and on pull requests.
+
 ## Quick start (CLI)
 
 ```bash
