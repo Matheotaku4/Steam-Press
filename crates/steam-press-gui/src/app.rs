@@ -1,6 +1,7 @@
 //! Modern egui desktop interface for Steam Press.
 
 use crate::state::{EntryStatus, GameQueue, LogEntry, LogLevel, WorkerEvent, WorkshopQueue};
+use crate::updater::{self, AvailableUpdate};
 use eframe::egui;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -199,6 +200,20 @@ impl Palette {
     }
 }
 
+#[derive(Debug, Default)]
+struct UpdateState {
+    available: Option<AvailableUpdate>,
+    checking: bool,
+    installing: bool,
+    message: Option<String>,
+    error: Option<String>,
+}
+
+enum UpdateMessage {
+    Checked(Result<Option<AvailableUpdate>, String>),
+    Installed(Result<(), String>),
+}
+
 pub struct SteamPressApp {
     paths: Paths,
     settings: Settings,
@@ -214,6 +229,9 @@ pub struct SteamPressApp {
     game_search_error: Option<String>,
     game_search_receiver: Option<Receiver<Result<Vec<StoreSearchItem>, String>>>,
     searching_games: bool,
+    update: UpdateState,
+    update_receiver: Option<Receiver<UpdateMessage>>,
+    update_started: bool,
     applied_dark: Option<bool>,
     depot_names: DepotNames,
     depot_search: String,
@@ -312,6 +330,9 @@ impl SteamPressApp {
             game_search_error: None,
             game_search_receiver: None,
             searching_games: false,
+            update: UpdateState::default(),
+            update_receiver: None,
+            update_started: false,
             applied_dark: None,
             depot_names,
             depot_search: String::new(),
@@ -347,7 +368,10 @@ impl SteamPressApp {
             ..Default::default()
         };
         settings.ensure_key();
-        Self::assemble(paths, settings, DepotNames::default(), LoginForm::default())
+        let mut app = Self::assemble(paths, settings, DepotNames::default(), LoginForm::default());
+        // Tests must not reach the GitHub API.
+        app.update_started = true;
+        app
     }
 
     fn output_dir(&self) -> PathBuf {
@@ -389,6 +413,90 @@ impl SteamPressApp {
                 self.game_search_results = items;
             }
             Err(error) => self.game_search_error = Some(error),
+        }
+    }
+
+    fn start_update_check(&mut self, context: &egui::Context) {
+        if self.update.checking || self.update.installing {
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(UpdateMessage::Checked(updater::check_for_update(
+                updater::current_version(),
+            )));
+        });
+        self.update_receiver = Some(receiver);
+        self.update.checking = true;
+        self.update.error = None;
+        self.update.message = None;
+        context.request_repaint();
+    }
+
+    fn start_update_install(&mut self, context: &egui::Context) {
+        if self.update.installing || self.update.checking {
+            return;
+        }
+        if self.running {
+            self.update.error =
+                Some("Finish the active queue before installing an update.".to_string());
+            return;
+        }
+        let Some(update) = self.update.available.clone() else {
+            return;
+        };
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(UpdateMessage::Installed(updater::install(&update)));
+        });
+        self.update_receiver = Some(receiver);
+        self.update.installing = true;
+        self.update.error = None;
+        self.update.message = Some("Downloading and verifying the update...".to_string());
+        context.request_repaint();
+    }
+
+    fn poll_update(&mut self, context: &egui::Context) {
+        let received = self
+            .update_receiver
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok());
+        let Some(message) = received else {
+            return;
+        };
+        self.update_receiver = None;
+        match message {
+            UpdateMessage::Checked(Ok(Some(update))) => {
+                self.update.checking = false;
+                self.update.available = Some(update);
+                self.update.message = Some("A new version is available.".to_string());
+            }
+            UpdateMessage::Checked(Ok(None)) => {
+                self.update.checking = false;
+                self.update.available = None;
+                self.update.message = Some("You are running the latest version.".to_string());
+            }
+            UpdateMessage::Checked(Err(error)) => {
+                self.update.checking = false;
+                self.update.error = Some(error);
+            }
+            UpdateMessage::Installed(Ok(())) => {
+                self.update.installing = false;
+                self.update.available = None;
+                self.update.message = Some("Update installed. Restarting...".to_string());
+                self.allow_close = true;
+                match updater::restart() {
+                    Ok(()) => context.send_viewport_cmd(egui::ViewportCommand::Close),
+                    Err(error) => {
+                        self.allow_close = false;
+                        self.update.error = Some(error);
+                    }
+                }
+            }
+            UpdateMessage::Installed(Err(error)) => {
+                self.update.installing = false;
+                self.update.error = Some(error);
+            }
         }
     }
 
@@ -976,6 +1084,21 @@ impl SteamPressApp {
                                     self.settings.dark_mode = !self.settings.dark_mode;
                                 }
                             });
+                            if let Some(update) =
+                                self.update.available.clone().filter(|_| !self.running)
+                            {
+                                ui.add_space(4.0);
+                                if small_labeled_button(
+                                    ui,
+                                    palette,
+                                    icons::DOWNLOAD,
+                                    &format!("Install v{}", update.version),
+                                )
+                                .clicked()
+                                {
+                                    self.start_update_install(ui.ctx());
+                                }
+                            }
                         });
                 });
             });
@@ -1656,6 +1779,8 @@ impl SteamPressApp {
 
     fn settings_page(&mut self, ui: &mut egui::Ui, palette: &Palette) -> Option<UiAction> {
         let mut action = None;
+        let mut check_update = false;
+        let mut install_update = false;
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 ui.label(page_title(palette, "Settings"));
@@ -1867,6 +1992,108 @@ impl SteamPressApp {
             });
         });
 
+        ui.add_space(14.0);
+        let available = self.update.available.clone();
+        card(ui, palette, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    section_title(
+                        ui,
+                        palette,
+                        "Updates",
+                        "Checks the gui-v releases on GitHub.",
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.update.checking || self.update.installing {
+                        ui.spinner();
+                    }
+                });
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.label(icon_text(icons::CHECK, 11.0, palette.success));
+                ui.label(
+                    egui::RichText::new(format!("Current version: {}", updater::current_version()))
+                        .size(11.0)
+                        .color(palette.text),
+                );
+            });
+            if let Some(message) = &self.update.message {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(icon_text(icons::REFRESH, 11.0, palette.muted));
+                    ui.label(egui::RichText::new(message).size(10.5).color(palette.muted));
+                });
+            }
+            if let Some(error) = &self.update.error {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(icon_text(icons::ALERT, 11.0, palette.danger));
+                    ui.label(egui::RichText::new(error).size(10.5).color(palette.danger));
+                });
+            }
+            if let Some(update) = &available {
+                ui.add_space(8.0);
+                egui::Frame::new()
+                    .fill(palette.input)
+                    .corner_radius(egui::CornerRadius::same(9))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.label(icon_text(icons::DOWNLOAD, 12.0, palette.accent));
+                            ui.vertical(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "Version {} is available",
+                                        update.version
+                                    ))
+                                    .size(11.5)
+                                    .strong()
+                                    .color(palette.text),
+                                );
+                                ui.label(
+                                    egui::RichText::new(&update.tag)
+                                        .monospace()
+                                        .size(9.5)
+                                        .color(palette.muted),
+                                );
+                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if primary_button(
+                                        ui,
+                                        palette,
+                                        icons::DOWNLOAD,
+                                        "Install and restart",
+                                        !self.update.installing
+                                            && !self.update.checking
+                                            && !self.running,
+                                    )
+                                    .clicked()
+                                    {
+                                        install_update = true;
+                                    }
+                                },
+                            );
+                        });
+                    });
+            }
+            ui.add_space(8.0);
+            if secondary_button(ui, palette, icons::REFRESH, "Check for updates").clicked() {
+                check_update = true;
+            }
+        });
+
+        if check_update {
+            self.start_update_check(ui.ctx());
+        }
+        if install_update {
+            self.start_update_install(ui.ctx());
+        }
+
         action
     }
 
@@ -1888,6 +2115,11 @@ impl SteamPressApp {
 
         self.poll();
         self.poll_game_search();
+        self.poll_update(context);
+        if !self.update_started {
+            self.update_started = true;
+            self.start_update_check(context);
+        }
         self.sidebar(context, &palette);
         self.activity_panel(context, &palette);
 
@@ -1945,7 +2177,7 @@ impl SteamPressApp {
             }
         }
 
-        if self.running || self.searching_games {
+        if self.running || self.searching_games || self.update.checking || self.update.installing {
             context.request_repaint_after(Duration::from_millis(120));
         }
     }
@@ -2465,6 +2697,24 @@ mod tests {
             app.draw(context);
         });
         assert_eq!(app.game_search_results.len(), 1);
+    }
+
+    #[test]
+    fn update_card_renders_with_an_available_update() {
+        let mut app = test_app("update-card");
+        app.update.available = Some(AvailableUpdate {
+            version: "0.4.1".to_string(),
+            tag: "gui-v0.4.1".to_string(),
+            archive_url: "https://example.com/gui.tar.gz".to_string(),
+            checksum_url: "https://example.com/gui.tar.gz.sha256".to_string(),
+        });
+        app.update.message = Some("A new version is available.".to_string());
+        app.tab = Tab::Settings;
+        let context = egui::Context::default();
+        let _ = context.run(egui::RawInput::default(), |context| {
+            app.draw(context);
+        });
+        assert!(app.update.available.is_some());
     }
 
     #[test]

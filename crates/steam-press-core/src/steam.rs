@@ -7,7 +7,7 @@ use std::time::Duration;
 const INFO_URL: &str = "https://api.steamcmd.net/v1/info";
 const STORE_URL: &str = "https://store.steampowered.com/api/appdetails";
 const SEARCH_URL: &str = "https://store.steampowered.com/api/storesearch";
-const USER_AGENT: &str = "SteamPress/0.3";
+const USER_AGENT: &str = "SteamPress/0.4";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DepotEntry {

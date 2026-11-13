@@ -28,6 +28,7 @@ macOS support can be added later.
   [SteamDepotNames](https://github.com/Masquerade64/SteamDepotNames).
 - Cancellation during download or compression; partial archives are kept.
 - Encrypted local credential vault (AES-256-GCM).
+- Automatic GUI updates from `gui-v*` releases, with SHA-256 verification and restart.
 
 ## Architecture
 
@@ -55,18 +56,23 @@ Binaries land in `target/release/steam-press` and `target/release/steam-press-gu
 
 ## Releases
 
-GitHub Actions publishes the Linux binaries when the version in
-`crates/steam-press-core/Cargo.toml` does not have a release yet, and when a matching `v*`
-tag is pushed. To force a release after a manual version bump:
+GitHub Actions publishes two independent Linux releases when the version in
+`crates/steam-press-core/Cargo.toml` has no matching release yet:
+
+- `cli-v<version>` contains `steam-press`, the README and the usage guide;
+- `gui-v<version>` contains `steam-press-gui`, the README and the usage guide.
+
+Both provide a `.tar.gz` archive and a `.sha256` checksum. To publish them from a tag instead:
 
 ```bash
-git tag -a v0.3.1 -m "Steam Press 0.3.1"
-git push origin v0.3.1
+git tag -a v0.4.0 -m "Steam Press 0.4.0"
+git push origin v0.4.0
 ```
 
-Each release contains `steam-press`, `steam-press-gui`, the README, the usage guide and a
-`.sha256` checksum. The `CI` workflow runs formatting, Clippy and the test suite on every
-push to `main` and on pull requests.
+The GUI checks `gui-v*` releases on startup and from **Settings > Updates**. It downloads the
+matching archive, verifies its SHA-256 checksum, replaces the running executable and restarts.
+The `CI` workflow runs formatting, Clippy and the test suite on every push to `main` and on
+pull requests.
 
 ## Quick start (CLI)
 
@@ -108,7 +114,8 @@ The window has four sections: **Library** (game queue), **Workshop** (workshop q
 **Depots** (depot search and synchronization) and **Settings** (engine, compressor, paths,
 credentials, template, theme). Games can be found by name in the Steam store, and every action
 uses a Lucide icon. Downloads run in a worker thread; the activity panel streams the live log
-and the active queue can be cancelled.
+and the active queue can be cancelled. The GUI also checks for updates automatically and can
+install them from the Settings page.
 
 ## Configuration
 
@@ -159,7 +166,7 @@ The test suite is offline: Steam responses come from fixtures and no account is 
 - The GUI compiles but was not opened in the development environment (no display server).
 - Shared-depot handling is read-only: existing `SharedDepots` are preserved, but Steamworks
   redistributable rows are not synthesized yet.
-- Windows and macOS are not validated.
+- Windows and macOS are not validated, and automatic updates are Linux-only.
 
 ## Credits
 

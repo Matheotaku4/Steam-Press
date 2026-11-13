@@ -1,5 +1,6 @@
 mod app;
 mod state;
+mod updater;
 
 use eframe::egui;
 

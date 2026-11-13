@@ -164,7 +164,15 @@ template=
 key=<clé locale>
 ```
 
-## 9. Erreurs fréquentes
+## 9. Mises à jour de la GUI
+
+La GUI vérifie automatiquement les releases `gui-v*` au démarrage. La page **Settings >
+Updates** affiche la version courante, permet de relancer la vérification et d'installer une
+mise à jour. L'archive est téléchargée depuis GitHub, son empreinte SHA-256 est vérifiée, puis
+l'exécutable est remplacé et l'application redémarre. Les mises à jour automatiques sont
+limitées à Linux.
+
+## 10. Erreurs fréquentes
 
 | Message | Cause / solution |
 |---|---|
@@ -175,7 +183,7 @@ key=<clé locale>
 | `7-Zip introuvable` | installez `p7zip-full` ou renseignez `sevenzippath` |
 | `aucun identifiant enregistré` | `steam-press login` ou `--anonymous` |
 
-## 10. Sécurité
+## 11. Sécurité
 
 - Les identifiants sont chiffrés en AES-256-GCM avec une clé générée localement.
 - Le fichier `credentials.bin` est créé en mode `0600`.
