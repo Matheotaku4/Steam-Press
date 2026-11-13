@@ -99,10 +99,10 @@ steam-press workshop run --queue ~/.config/steam-press/queue.sswq
 cargo run -p steam-press-gui
 ```
 
-The window has four tabs: **Jeu** (game queue), **Atelier** (workshop queue), **Dépôts**
-(depot search and synchronization) and **Réglages** (engine, compressor, paths, credentials,
-template, theme). Downloads run in a worker thread; the interface shows progress and can
-cancel the active job.
+The window has four sections: **Library** (game queue), **Workshop** (workshop queue),
+**Depots** (depot search and synchronization) and **Settings** (engine, compressor, paths,
+credentials, template, theme). Downloads run in a worker thread; the activity panel streams
+the live log and the active queue can be cancelled.
 
 ## Configuration
 

@@ -16,12 +16,48 @@ pub enum EntryStatus {
 impl EntryStatus {
     pub fn label(&self) -> &'static str {
         match self {
-            Self::Ready => "Prêt",
-            Self::Running => "En cours",
-            Self::Done => "Terminé",
-            Self::Skipped => "Ignoré",
-            Self::Failed(_) => "Échec",
-            Self::Cancelled => "Annulé",
+            Self::Ready => "Ready",
+            Self::Running => "Running",
+            Self::Done => "Completed",
+            Self::Skipped => "Skipped",
+            Self::Failed(_) => "Failed",
+            Self::Cancelled => "Cancelled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Info,
+    Step,
+    Success,
+    Warning,
+    Error,
+}
+
+impl LogLevel {
+    pub fn tag(&self) -> &'static str {
+        match self {
+            Self::Info => "INFO",
+            Self::Step => "STEP",
+            Self::Success => "DONE",
+            Self::Warning => "WARN",
+            Self::Error => "ERR",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogEntry {
+    pub level: LogLevel,
+    pub text: String,
+}
+
+impl LogEntry {
+    pub fn new(level: LogLevel, text: impl Into<String>) -> Self {
+        Self {
+            level,
+            text: text.into(),
         }
     }
 }
@@ -74,6 +110,13 @@ impl<T: PartialEq + Clone> JobQueue<T> {
         self.entries.is_empty()
     }
 
+    pub fn count<F>(&self, predicate: F) -> usize
+    where
+        F: Fn(&QueueEntry<T>) -> bool,
+    {
+        self.entries.iter().filter(|entry| predicate(entry)).count()
+    }
+
     pub fn remove(&mut self, index: usize) -> Option<QueueEntry<T>> {
         if index < self.entries.len() {
             Some(self.entries.remove(index))
@@ -105,6 +148,14 @@ impl<T: PartialEq + Clone> JobQueue<T> {
         for entry in &mut self.entries {
             if key(&entry.job) {
                 entry.status = status.clone();
+            }
+        }
+    }
+
+    pub fn cancel_unfinished(&mut self) {
+        for entry in &mut self.entries {
+            if matches!(entry.status, EntryStatus::Ready | EntryStatus::Running) {
+                entry.status = EntryStatus::Cancelled;
             }
         }
     }
@@ -151,5 +202,25 @@ mod tests {
         assert_eq!(state.entries()[1].status, EntryStatus::Done);
         state.reset_statuses();
         assert_eq!(state.entries()[1].status, EntryStatus::Ready);
+    }
+
+    #[test]
+    fn cancellation_marks_only_unfinished_jobs() {
+        let mut state = GameQueue::default();
+        state.push(GameJob::new(Platform::Linux64, "10"));
+        state.push(GameJob::new(Platform::Linux64, "20"));
+        state.set_status(|job| job.appid == "10", EntryStatus::Done);
+        state.cancel_unfinished();
+        assert_eq!(state.entries()[0].status, EntryStatus::Done);
+        assert_eq!(state.entries()[1].status, EntryStatus::Cancelled);
+    }
+
+    #[test]
+    fn log_entry_levels_have_tags() {
+        assert_eq!(LogLevel::Info.tag(), "INFO");
+        assert_eq!(LogLevel::Step.tag(), "STEP");
+        assert_eq!(LogLevel::Success.tag(), "DONE");
+        assert_eq!(LogLevel::Warning.tag(), "WARN");
+        assert_eq!(LogLevel::Error.tag(), "ERR");
     }
 }
