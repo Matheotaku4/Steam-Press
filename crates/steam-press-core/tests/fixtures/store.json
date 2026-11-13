@@ -1,0 +1,12 @@
+{
+  "2379780": {
+    "success": true,
+    "data": {
+      "type": "game",
+      "name": "Balatro",
+      "steam_appid": 2379780,
+      "short_description": "The poker roguelike. Balatro is a hypnotically satisfying deckbuilder.",
+      "website": "http://www.playbalatro.com"
+    }
+  }
+}
