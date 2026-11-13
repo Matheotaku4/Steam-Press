@@ -110,13 +110,6 @@ impl<T: PartialEq + Clone> JobQueue<T> {
         self.entries.is_empty()
     }
 
-    pub fn count<F>(&self, predicate: F) -> usize
-    where
-        F: Fn(&QueueEntry<T>) -> bool,
-    {
-        self.entries.iter().filter(|entry| predicate(entry)).count()
-    }
-
     pub fn remove(&mut self, index: usize) -> Option<QueueEntry<T>> {
         if index < self.entries.len() {
             Some(self.entries.remove(index))

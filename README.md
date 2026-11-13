@@ -13,6 +13,7 @@ macOS support can be added later.
 ## Features
 
 - Game queue with platform, branch and protected-branch support.
+- Search the Steam store by name to fill an App ID, with Lucide icons throughout the GUI.
 - Workshop queue (`workshop_download_item`).
 - Two download engines behind one abstraction: **SteamCMD** (default) and **DepotDownloader**.
 - `.acf` reading, privacy sanitizing (`LastOwner`/`LauncherPath` set to `"0"`) and full
@@ -58,8 +59,8 @@ GitHub Actions publishes the Linux binaries when the version in
 tag is pushed. To force a release after a manual version bump:
 
 ```bash
-git tag -a v0.2.0 -m "Steam Press 0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "Steam Press 0.3.0"
+git push origin v0.3.0
 ```
 
 Each release contains `steam-press`, `steam-press-gui`, the README, the usage guide and a
@@ -101,8 +102,9 @@ cargo run -p steam-press-gui
 
 The window has four sections: **Library** (game queue), **Workshop** (workshop queue),
 **Depots** (depot search and synchronization) and **Settings** (engine, compressor, paths,
-credentials, template, theme). Downloads run in a worker thread; the activity panel streams
-the live log and the active queue can be cancelled.
+credentials, template, theme). Games can be found by name in the Steam store, and every action
+uses a Lucide icon. Downloads run in a worker thread; the activity panel streams the live log
+and the active queue can be cancelled.
 
 ## Configuration
 

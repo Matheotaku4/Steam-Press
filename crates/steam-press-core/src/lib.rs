@@ -32,5 +32,5 @@ pub use events::{CancellationToken, EventSink, PackEvent, Stage};
 pub use pack::{PackOptions, PackOutcome, PackStatus, Packer, PipelineError, Preflight};
 pub use platform::Platform;
 pub use queue::{GameJob, QueueLoad, WorkshopJob};
-pub use steam::{AppInfo, DepotEntry, StoreInfo};
+pub use steam::{AppInfo, DepotEntry, StoreInfo, StoreSearchItem};
 pub use workshop::{WorkshopOutcome, WorkshopPacker};

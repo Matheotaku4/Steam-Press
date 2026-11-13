@@ -17,11 +17,42 @@ use steam_press_core::events::{EventSink, FinishStatus, PackEvent, Stage};
 use steam_press_core::pack::{PackOptions, Packer};
 use steam_press_core::platform::Platform;
 use steam_press_core::queue::{GameJob, WorkshopJob};
+use steam_press_core::steam::StoreSearchItem;
 use steam_press_core::tooling;
 use steam_press_core::workshop::WorkshopPacker;
 
 type CancelHook = Box<dyn Fn() + Send + Sync>;
 type SharedHook = Arc<Mutex<Option<CancelHook>>>;
+
+mod icons {
+    pub const LIBRARY: &str = "\u{e100}";
+    pub const WORKSHOP: &str = "\u{e0ec}";
+    pub const DEPOTS: &str = "\u{e0ad}";
+    pub const SETTINGS: &str = "\u{e154}";
+    pub const PACKAGE: &str = "\u{e129}";
+    pub const SEARCH: &str = "\u{e151}";
+    pub const PLAY: &str = "\u{e13c}";
+    pub const STOP: &str = "\u{e167}";
+    pub const PLUS: &str = "\u{e13d}";
+    pub const DOWNLOAD: &str = "\u{e0b2}";
+    pub const UPLOAD: &str = "\u{e19e}";
+    pub const SAVE: &str = "\u{e14d}";
+    pub const TRASH: &str = "\u{e18e}";
+    pub const REFRESH: &str = "\u{e145}";
+    pub const FOLDER: &str = "\u{e247}";
+    pub const SUN: &str = "\u{e178}";
+    pub const MOON: &str = "\u{e11e}";
+    pub const CHEVRON_DOWN: &str = "\u{e06d}";
+    pub const CHEVRON_UP: &str = "\u{e070}";
+    pub const X: &str = "\u{e1b2}";
+    pub const ARROW_UP: &str = "\u{e04a}";
+    pub const ARROW_DOWN: &str = "\u{e042}";
+    pub const CHECK: &str = "\u{e06c}";
+    pub const ALERT: &str = "\u{e077}";
+    pub const BAN: &str = "\u{e051}";
+    pub const CLOCK: &str = "\u{e087}";
+    pub const LOADER: &str = "\u{e10a}";
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
@@ -178,6 +209,11 @@ pub struct SteamPressApp {
     game_form: GameForm,
     workshop_form: WorkshopForm,
     login: LoginForm,
+    game_search: String,
+    game_search_results: Vec<StoreSearchItem>,
+    game_search_error: Option<String>,
+    game_search_receiver: Option<Receiver<Result<Vec<StoreSearchItem>, String>>>,
+    searching_games: bool,
     applied_dark: Option<bool>,
     depot_names: DepotNames,
     depot_search: String,
@@ -271,6 +307,11 @@ impl SteamPressApp {
             game_form: GameForm::default(),
             workshop_form: WorkshopForm::default(),
             login,
+            game_search: String::new(),
+            game_search_results: Vec::new(),
+            game_search_error: None,
+            game_search_receiver: None,
+            searching_games: false,
             applied_dark: None,
             depot_names,
             depot_search: String::new(),
@@ -311,6 +352,44 @@ impl SteamPressApp {
 
     fn output_dir(&self) -> PathBuf {
         self.settings.output_dir(&self.paths)
+    }
+
+    fn start_game_search(&mut self, context: &egui::Context) {
+        let term = self.game_search.trim().to_string();
+        if term.chars().count() < 2 {
+            self.game_search_error = Some("Type at least two characters.".to_string());
+            return;
+        }
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(steam_press_core::steam::search_store(&term));
+        });
+        self.game_search_receiver = Some(receiver);
+        self.searching_games = true;
+        self.game_search_error = None;
+        self.game_search_results.clear();
+        context.request_repaint();
+    }
+
+    fn poll_game_search(&mut self) {
+        let received = self
+            .game_search_receiver
+            .as_ref()
+            .and_then(|receiver| receiver.try_recv().ok());
+        let Some(result) = received else {
+            return;
+        };
+        self.game_search_receiver = None;
+        self.searching_games = false;
+        match result {
+            Ok(items) => {
+                if items.is_empty() {
+                    self.game_search_error = Some("No games found.".to_string());
+                }
+                self.game_search_results = items;
+            }
+            Err(error) => self.game_search_error = Some(error),
+        }
     }
 
     fn push_log(&mut self, level: LogLevel, text: impl Into<String>) {
@@ -794,8 +873,8 @@ impl SteamPressApp {
                     ui.painter().text(
                         rect.center(),
                         egui::Align2::CENTER_CENTER,
-                        "SP",
-                        egui::FontId::proportional(12.0),
+                        icons::PACKAGE,
+                        egui::FontId::proportional(16.0),
                         palette.accent_text,
                     );
                     ui.add_space(6.0);
@@ -824,10 +903,25 @@ impl SteamPressApp {
                 ui.add_space(6.0);
 
                 let items = [
-                    (Tab::Library, "G", "Library", "Games and branches"),
-                    (Tab::Workshop, "W", "Workshop", "Community items"),
-                    (Tab::Depots, "D", "Depots", "Steam metadata"),
-                    (Tab::Settings, "S", "Settings", "Tools and paths"),
+                    (
+                        Tab::Library,
+                        icons::LIBRARY,
+                        "Library",
+                        "Games and branches",
+                    ),
+                    (
+                        Tab::Workshop,
+                        icons::WORKSHOP,
+                        "Workshop",
+                        "Community items",
+                    ),
+                    (Tab::Depots, icons::DEPOTS, "Depots", "Steam metadata"),
+                    (
+                        Tab::Settings,
+                        icons::SETTINGS,
+                        "Settings",
+                        "Tools and paths",
+                    ),
                 ];
                 for (tab, icon, label, hint) in items {
                     if nav_item(ui, palette, icon, label, hint, self.tab == tab).clicked() {
@@ -863,13 +957,21 @@ impl SteamPressApp {
                             );
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
-                                if ui
-                                    .small_button(if self.settings.dark_mode {
+                                if small_labeled_button(
+                                    ui,
+                                    palette,
+                                    if self.settings.dark_mode {
+                                        icons::SUN
+                                    } else {
+                                        icons::MOON
+                                    },
+                                    if self.settings.dark_mode {
                                         "Light theme"
                                     } else {
                                         "Dark theme"
-                                    })
-                                    .clicked()
+                                    },
+                                )
+                                .clicked()
                                 {
                                     self.settings.dark_mode = !self.settings.dark_mode;
                                 }
@@ -883,13 +985,13 @@ impl SteamPressApp {
         let message = self
             .error
             .clone()
-            .map(|text| (text, palette.danger))
+            .map(|text| (text, palette.danger, icons::ALERT))
             .or_else(|| {
                 self.status_message
                     .clone()
-                    .map(|text| (text, palette.success))
+                    .map(|text| (text, palette.success, icons::CHECK))
             });
-        let Some((text, color)) = message else {
+        let Some((text, color, glyph)) = message else {
             return;
         };
         let mut dismiss = false;
@@ -900,9 +1002,10 @@ impl SteamPressApp {
             .inner_margin(egui::Margin::symmetric(12, 8))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    ui.label(icon_text(glyph, 13.0, color));
                     ui.label(egui::RichText::new(text).size(12.0).color(color));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Dismiss").clicked() {
+                        if small_labeled_button(ui, palette, icons::X, "Dismiss").clicked() {
                             dismiss = true;
                         }
                     });
@@ -937,8 +1040,17 @@ impl SteamPressApp {
                     } else {
                         palette.muted
                     };
+                    ui.label(icon_text(
+                        if self.running {
+                            icons::LOADER
+                        } else {
+                            icons::CLOCK
+                        },
+                        10.5,
+                        status_color,
+                    ));
                     ui.label(
-                        egui::RichText::new(if self.running { "● Live" } else { "● Idle" })
+                        egui::RichText::new(if self.running { "Live" } else { "Idle" })
                             .size(10.5)
                             .color(status_color),
                     );
@@ -950,22 +1062,37 @@ impl SteamPressApp {
                     ui.with_layout(
                         egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
-                            if ui
-                                .small_button(if self.activity_open { "Hide" } else { "Show" })
-                                .clicked()
+                            if small_labeled_button(
+                                ui,
+                                palette,
+                                if self.activity_open {
+                                    icons::CHEVRON_DOWN
+                                } else {
+                                    icons::CHEVRON_UP
+                                },
+                                if self.activity_open { "Hide" } else { "Show" },
+                            )
+                            .clicked()
                             {
                                 self.activity_open = !self.activity_open;
                             }
-                            if self.activity_open && ui.small_button("Clear").clicked() {
+                            if self.activity_open
+                                && small_labeled_button(ui, palette, icons::TRASH, "Clear")
+                                    .clicked()
+                            {
                                 self.log.clear();
                             }
-                            if ui.small_button("Open output").clicked() {
+                            if small_labeled_button(ui, palette, icons::FOLDER, "Open output")
+                                .clicked()
+                            {
                                 let output = self.output_dir();
                                 let _ = std::fs::create_dir_all(&output);
                                 let _ = tooling::open_folder(&output);
                             }
                             if self.running {
-                                if ui.small_button("Cancel").clicked() {
+                                if small_labeled_button(ui, palette, icons::STOP, "Cancel")
+                                    .clicked()
+                                {
                                     self.cancel();
                                 }
                                 ui.spinner();
@@ -1021,12 +1148,6 @@ impl SteamPressApp {
 
     fn library_page(&mut self, ui: &mut egui::Ui, palette: &Palette) -> Option<UiAction> {
         let mut action = None;
-        let completed = self
-            .game_queue
-            .count(|entry| entry.status == EntryStatus::Done);
-        let failed = self
-            .game_queue
-            .count(|entry| matches!(entry.status, EntryStatus::Failed(_)));
 
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
@@ -1039,11 +1160,17 @@ impl SteamPressApp {
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.running {
-                    if primary_button(ui, palette, "Cancel", true).clicked() {
+                    if primary_button(ui, palette, icons::STOP, "Cancel", true).clicked() {
                         action = Some(UiAction::Cancel);
                     }
-                } else if primary_button(ui, palette, "Start queue", !self.game_queue.is_empty())
-                    .clicked()
+                } else if primary_button(
+                    ui,
+                    palette,
+                    icons::PLAY,
+                    "Start queue",
+                    !self.game_queue.is_empty(),
+                )
+                .clicked()
                 {
                     action = Some(UiAction::StartGames);
                 }
@@ -1051,32 +1178,88 @@ impl SteamPressApp {
         });
         ui.add_space(18.0);
 
-        ui.columns(3, |columns| {
-            stat_card(
-                &mut columns[0],
-                palette,
-                "Queued",
-                self.game_queue.len(),
-                palette.text,
-            );
-            stat_card(
-                &mut columns[1],
-                palette,
-                "Completed",
-                completed,
-                palette.success,
-            );
-            stat_card(&mut columns[2], palette, "Failed", failed, palette.danger);
-        });
-        ui.add_space(14.0);
-
         card(ui, palette, |ui| {
             section_title(
                 ui,
                 palette,
                 "Add a game",
-                "Steam App ID, branch and target platform.",
+                "Search Steam by name, or enter an App ID directly.",
             );
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                ui.label(icon_text(icons::SEARCH, 13.0, palette.muted));
+                let search = ui.add(
+                    egui::TextEdit::singleline(&mut self.game_search)
+                        .hint_text("Search a game by name")
+                        .desired_width(300.0),
+                );
+                let submitted =
+                    search.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                if secondary_button(ui, palette, icons::SEARCH, "Search").clicked() || submitted {
+                    self.start_game_search(ui.ctx());
+                }
+                if self.searching_games {
+                    ui.spinner();
+                    ui.label(
+                        egui::RichText::new("Searching Steam...")
+                            .size(10.5)
+                            .color(palette.muted),
+                    );
+                }
+            });
+            if let Some(error) = &self.game_search_error {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(icon_text(icons::ALERT, 11.0, palette.danger));
+                    ui.label(egui::RichText::new(error).size(10.5).color(palette.danger));
+                });
+            }
+            if !self.game_search_results.is_empty() {
+                ui.add_space(8.0);
+                let results = self.game_search_results.clone();
+                egui::Frame::new()
+                    .fill(palette.input)
+                    .corner_radius(egui::CornerRadius::same(9))
+                    .inner_margin(egui::Margin::symmetric(12, 8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        let mut selected = None;
+                        for item in results.iter().take(8) {
+                            ui.horizontal(|ui| {
+                                ui.label(icon_text(icons::PACKAGE, 11.0, palette.muted));
+                                ui.label(
+                                    egui::RichText::new(&item.appid)
+                                        .monospace()
+                                        .size(10.0)
+                                        .color(palette.muted),
+                                );
+                                ui.label(
+                                    egui::RichText::new(&item.name)
+                                        .size(11.5)
+                                        .color(palette.text),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if small_labeled_button(ui, palette, icons::CHECK, "Use")
+                                            .clicked()
+                                        {
+                                            selected = Some(item.clone());
+                                        }
+                                    },
+                                );
+                            });
+                        }
+                        if let Some(item) = selected {
+                            self.game_form.appid = item.appid;
+                            self.game_search = item.name;
+                            self.game_search_results.clear();
+                            self.game_search_error = None;
+                            self.status_message =
+                                Some("App ID filled from the Steam store.".to_string());
+                        }
+                    });
+            }
             ui.add_space(10.0);
             ui.horizontal_wrapped(|ui| {
                 field(ui, palette, "App ID", 96.0, |ui| {
@@ -1114,7 +1297,7 @@ impl SteamPressApp {
                     );
                 });
                 ui.add_space(2.0);
-                if primary_button(ui, palette, "Add game", true).clicked() {
+                if primary_button(ui, palette, icons::PLUS, "Add game", true).clicked() {
                     let appid = self.game_form.appid.trim();
                     if appid.parse::<u64>().map(|value| value > 0).unwrap_or(false) {
                         let job = GameJob::new(self.game_form.platform, appid).with_branch(
@@ -1124,6 +1307,9 @@ impl SteamPressApp {
                         if self.game_queue.push(job) {
                             self.game_form.appid.clear();
                             self.game_form.branch_password.clear();
+                            self.game_search.clear();
+                            self.game_search_results.clear();
+                            self.game_search_error = None;
                             self.error = None;
                             self.status_message = Some("Game added to the queue.".to_string());
                         } else {
@@ -1144,7 +1330,10 @@ impl SteamPressApp {
                     if ui
                         .add_enabled(
                             !self.running && !self.game_queue.is_empty(),
-                            egui::Button::new(egui::RichText::new("Clear queue").size(11.0)),
+                            egui::Button::new(
+                                egui::RichText::new(format!("{}  Clear queue", icons::TRASH))
+                                    .size(11.0),
+                            ),
                         )
                         .clicked()
                     {
@@ -1163,7 +1352,7 @@ impl SteamPressApp {
                     ui,
                     palette,
                     "No games queued",
-                    "Add an App ID above or import a .SSPQ queue file.",
+                    "Search Steam above, add an App ID, or import a .SSPQ queue file.",
                 );
             } else {
                 let mut row_action = None;
@@ -1192,16 +1381,17 @@ impl SteamPressApp {
             ui.separator();
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
+                ui.label(icon_text(icons::FOLDER, 11.0, palette.muted));
                 ui.label(
                     egui::RichText::new("Queue file")
                         .size(11.0)
                         .color(palette.muted),
                 );
                 ui.add(egui::TextEdit::singleline(&mut self.queue_io_path).desired_width(250.0));
-                if secondary_button(ui, palette, "Import").clicked() {
+                if secondary_button(ui, palette, icons::DOWNLOAD, "Import").clicked() {
                     action = Some(UiAction::ImportGames);
                 }
-                if secondary_button(ui, palette, "Export").clicked() {
+                if secondary_button(ui, palette, icons::UPLOAD, "Export").clicked() {
                     action = Some(UiAction::ExportGames);
                 }
             });
@@ -1212,12 +1402,6 @@ impl SteamPressApp {
 
     fn workshop_page(&mut self, ui: &mut egui::Ui, palette: &Palette) -> Option<UiAction> {
         let mut action = None;
-        let completed = self
-            .workshop_queue
-            .count(|entry| entry.status == EntryStatus::Done);
-        let failed = self
-            .workshop_queue
-            .count(|entry| matches!(entry.status, EntryStatus::Failed(_)));
 
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
@@ -1230,12 +1414,13 @@ impl SteamPressApp {
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if self.running {
-                    if primary_button(ui, palette, "Cancel", true).clicked() {
+                    if primary_button(ui, palette, icons::STOP, "Cancel", true).clicked() {
                         action = Some(UiAction::Cancel);
                     }
                 } else if primary_button(
                     ui,
                     palette,
+                    icons::PLAY,
                     "Start queue",
                     !self.workshop_queue.is_empty(),
                 )
@@ -1246,25 +1431,6 @@ impl SteamPressApp {
             });
         });
         ui.add_space(18.0);
-
-        ui.columns(3, |columns| {
-            stat_card(
-                &mut columns[0],
-                palette,
-                "Queued",
-                self.workshop_queue.len(),
-                palette.text,
-            );
-            stat_card(
-                &mut columns[1],
-                palette,
-                "Completed",
-                completed,
-                palette.success,
-            );
-            stat_card(&mut columns[2], palette, "Failed", failed, palette.danger);
-        });
-        ui.add_space(14.0);
 
         card(ui, palette, |ui| {
             section_title(
@@ -1290,7 +1456,7 @@ impl SteamPressApp {
                     );
                 });
                 ui.add_space(2.0);
-                if primary_button(ui, palette, "Add item", true).clicked() {
+                if primary_button(ui, palette, icons::PLUS, "Add item", true).clicked() {
                     let job = WorkshopJob::new(
                         self.workshop_form.appid.trim(),
                         self.workshop_form.workshop_id.trim(),
@@ -1319,7 +1485,10 @@ impl SteamPressApp {
                     if ui
                         .add_enabled(
                             !self.running && !self.workshop_queue.is_empty(),
-                            egui::Button::new(egui::RichText::new("Clear queue").size(11.0)),
+                            egui::Button::new(
+                                egui::RichText::new(format!("{}  Clear queue", icons::TRASH))
+                                    .size(11.0),
+                            ),
                         )
                         .clicked()
                     {
@@ -1368,16 +1537,17 @@ impl SteamPressApp {
             ui.separator();
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
+                ui.label(icon_text(icons::FOLDER, 11.0, palette.muted));
                 ui.label(
                     egui::RichText::new("Queue file")
                         .size(11.0)
                         .color(palette.muted),
                 );
                 ui.add(egui::TextEdit::singleline(&mut self.workshop_io_path).desired_width(250.0));
-                if secondary_button(ui, palette, "Import").clicked() {
+                if secondary_button(ui, palette, icons::DOWNLOAD, "Import").clicked() {
                     action = Some(UiAction::ImportWorkshop);
                 }
-                if secondary_button(ui, palette, "Export").clicked() {
+                if secondary_button(ui, palette, icons::UPLOAD, "Export").clicked() {
                     action = Some(UiAction::ExportWorkshop);
                 }
             });
@@ -1398,7 +1568,7 @@ impl SteamPressApp {
                 );
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if primary_button(ui, palette, "Sync names", true).clicked() {
+                if primary_button(ui, palette, icons::REFRESH, "Sync names", true).clicked() {
                     action = Some(UiAction::SyncDepots);
                 }
             });
@@ -1496,7 +1666,7 @@ impl SteamPressApp {
                 );
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if primary_button(ui, palette, "Save settings", true).clicked() {
+                if primary_button(ui, palette, icons::SAVE, "Save settings", true).clicked() {
                     action = Some(UiAction::SaveSettings);
                 }
             });
@@ -1574,7 +1744,7 @@ impl SteamPressApp {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.output_dir_text).desired_width(300.0),
                     );
-                    if secondary_button(ui, palette, "Open").clicked() {
+                    if secondary_button(ui, palette, icons::FOLDER, "Open").clicked() {
                         action = Some(UiAction::OpenOutput);
                     }
                 });
@@ -1668,10 +1838,10 @@ impl SteamPressApp {
             });
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                if secondary_button(ui, palette, "Save credentials").clicked() {
+                if secondary_button(ui, palette, icons::SAVE, "Save credentials").clicked() {
                     action = Some(UiAction::SaveLogin);
                 }
-                if secondary_button(ui, palette, "Remove").clicked() {
+                if secondary_button(ui, palette, icons::TRASH, "Remove").clicked() {
                     action = Some(UiAction::DeleteLogin);
                 }
             });
@@ -1701,6 +1871,7 @@ impl SteamPressApp {
     }
 
     fn draw(&mut self, context: &egui::Context) {
+        ensure_icon_font(context);
         let palette = Palette::for_mode(self.settings.dark_mode);
         if self.applied_dark != Some(palette.dark) {
             self.apply_style(context, &palette);
@@ -1716,6 +1887,7 @@ impl SteamPressApp {
         }
 
         self.poll();
+        self.poll_game_search();
         self.sidebar(context, &palette);
         self.activity_panel(context, &palette);
 
@@ -1753,10 +1925,12 @@ impl SteamPressApp {
                     ui.label("A download is running. It will be cancelled.");
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if primary_button(ui, &palette, "Cancel and quit", true).clicked() {
+                        if primary_button(ui, &palette, icons::STOP, "Cancel and quit", true)
+                            .clicked()
+                        {
                             quit = true;
                         }
-                        if secondary_button(ui, &palette, "Keep running").clicked() {
+                        if secondary_button(ui, &palette, icons::PLAY, "Keep running").clicked() {
                             stay = true;
                         }
                     });
@@ -1771,7 +1945,7 @@ impl SteamPressApp {
             }
         }
 
-        if self.running {
+        if self.running || self.searching_games {
             context.request_repaint_after(Duration::from_millis(120));
         }
     }
@@ -1781,6 +1955,48 @@ impl eframe::App for SteamPressApp {
     fn update(&mut self, context: &egui::Context, _frame: &mut eframe::Frame) {
         self.draw(context);
     }
+}
+
+fn ensure_icon_font(context: &egui::Context) {
+    let marker = egui::Id::new("steam-press-lucide-font");
+    if context.data(|data| data.get_temp::<bool>(marker).unwrap_or(false)) {
+        return;
+    }
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "lucide".to_string(),
+        egui::FontData::from_static(include_bytes!("../assets/lucide.ttf")).into(),
+    );
+    fonts
+        .families
+        .entry(egui::FontFamily::Proportional)
+        .or_default()
+        .push("lucide".to_string());
+    context.set_fonts(fonts);
+    context.data_mut(|data| data.insert_temp(marker, true));
+}
+
+fn icon_text(glyph: &str, size: f32, color: egui::Color32) -> egui::RichText {
+    egui::RichText::new(glyph).size(size).color(color)
+}
+
+fn small_icon_button(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    glyph: &str,
+    tooltip: &str,
+) -> egui::Response {
+    ui.small_button(icon_text(glyph, 12.0, palette.muted))
+        .on_hover_text(tooltip)
+}
+
+fn small_labeled_button(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    glyph: &str,
+    label: &str,
+) -> egui::Response {
+    ui.small_button(icon_text(&format!("{glyph}  {label}"), 10.5, palette.muted))
 }
 
 fn nav_item(
@@ -1828,7 +2044,7 @@ fn nav_item(
             icon_rect.center(),
             egui::Align2::CENTER_CENTER,
             icon,
-            egui::FontId::proportional(11.0),
+            egui::FontId::proportional(14.0),
             if selected {
                 palette.accent_text
             } else {
@@ -1905,46 +2121,17 @@ fn field(
     });
 }
 
-fn stat_card(
-    ui: &mut egui::Ui,
-    palette: &Palette,
-    label: &str,
-    value: usize,
-    color: egui::Color32,
-) {
-    egui::Frame::new()
-        .fill(palette.card)
-        .stroke(egui::Stroke::new(1.0_f32, palette.border))
-        .corner_radius(egui::CornerRadius::same(12))
-        .inner_margin(egui::Margin::same(15))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.label(
-                egui::RichText::new(label.to_uppercase())
-                    .size(9.5)
-                    .strong()
-                    .color(palette.muted),
-            );
-            ui.add_space(2.0);
-            ui.label(
-                egui::RichText::new(value.to_string())
-                    .size(25.0)
-                    .strong()
-                    .color(color),
-            );
-        });
-}
-
 fn primary_button(
     ui: &mut egui::Ui,
     palette: &Palette,
+    icon: &str,
     label: &str,
     enabled: bool,
 ) -> egui::Response {
     ui.add_enabled(
         enabled,
         egui::Button::new(
-            egui::RichText::new(label)
+            egui::RichText::new(format!("{icon}  {label}"))
                 .size(12.5)
                 .strong()
                 .color(palette.accent_text),
@@ -1955,13 +2142,22 @@ fn primary_button(
     )
 }
 
-fn secondary_button(ui: &mut egui::Ui, palette: &Palette, label: &str) -> egui::Response {
+fn secondary_button(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    icon: &str,
+    label: &str,
+) -> egui::Response {
     ui.add(
-        egui::Button::new(egui::RichText::new(label).size(12.0).color(palette.text))
-            .fill(palette.input)
-            .stroke(egui::Stroke::new(1.0_f32, palette.border))
-            .corner_radius(egui::CornerRadius::same(8))
-            .min_size(egui::vec2(0.0, 30.0)),
+        egui::Button::new(
+            egui::RichText::new(format!("{icon}  {label}"))
+                .size(12.0)
+                .color(palette.text),
+        )
+        .fill(palette.input)
+        .stroke(egui::Stroke::new(1.0_f32, palette.border))
+        .corner_radius(egui::CornerRadius::same(8))
+        .min_size(egui::vec2(0.0, 30.0)),
     )
 }
 
@@ -1999,12 +2195,24 @@ fn status_pill(ui: &mut egui::Ui, palette: &Palette, status: &EntryStatus) {
         .corner_radius(egui::CornerRadius::same(20))
         .inner_margin(egui::Margin::symmetric(8, 3))
         .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(status.label())
-                    .size(9.5)
-                    .strong()
-                    .color(foreground),
-            );
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let glyph = match status {
+                    EntryStatus::Ready => icons::CLOCK,
+                    EntryStatus::Running => icons::LOADER,
+                    EntryStatus::Done => icons::CHECK,
+                    EntryStatus::Skipped => icons::BAN,
+                    EntryStatus::Failed(_) => icons::ALERT,
+                    EntryStatus::Cancelled => icons::BAN,
+                };
+                ui.label(icon_text(glyph, 9.5, foreground));
+                ui.label(
+                    egui::RichText::new(status.label())
+                        .size(9.5)
+                        .strong()
+                        .color(foreground),
+                );
+            });
         });
 }
 
@@ -2046,16 +2254,18 @@ fn game_row(
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_enabled_ui(!locked, |ui| {
-                        if ui.small_button("×").clicked() {
+                        if small_icon_button(ui, palette, icons::X, "Remove").clicked() {
                             action = Some(RowAction::Remove(index));
                         }
-                        if ui.small_button("↓").clicked() {
+                        if small_icon_button(ui, palette, icons::ARROW_DOWN, "Move down").clicked()
+                        {
                             action = Some(RowAction::Down(index));
                         }
-                        if ui.small_button("↑").clicked() {
+                        if small_icon_button(ui, palette, icons::ARROW_UP, "Move up").clicked() {
                             action = Some(RowAction::Up(index));
                         }
                     });
+
                     ui.add_space(4.0);
                     status_pill(ui, palette, &entry.status);
                 });
@@ -2102,13 +2312,14 @@ fn workshop_row(
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_enabled_ui(!locked, |ui| {
-                        if ui.small_button("×").clicked() {
+                        if small_icon_button(ui, palette, icons::X, "Remove").clicked() {
                             action = Some(RowAction::Remove(index));
                         }
-                        if ui.small_button("↓").clicked() {
+                        if small_icon_button(ui, palette, icons::ARROW_DOWN, "Move down").clicked()
+                        {
                             action = Some(RowAction::Down(index));
                         }
-                        if ui.small_button("↑").clicked() {
+                        if small_icon_button(ui, palette, icons::ARROW_UP, "Move up").clicked() {
                             action = Some(RowAction::Up(index));
                         }
                     });
@@ -2238,6 +2449,22 @@ mod tests {
             app.draw(context);
         });
         assert_eq!(app.log.len(), 2000);
+    }
+
+    #[test]
+    fn search_results_render_in_the_library() {
+        let mut app = test_app("search-results");
+        app.game_search = "balatro".to_string();
+        app.game_search_results = vec![StoreSearchItem {
+            appid: "2379780".to_string(),
+            name: "Balatro".to_string(),
+        }];
+        app.game_search_error = Some("No games found.".to_string());
+        let context = egui::Context::default();
+        let _ = context.run(egui::RawInput::default(), |context| {
+            app.draw(context);
+        });
+        assert_eq!(app.game_search_results.len(), 1);
     }
 
     #[test]

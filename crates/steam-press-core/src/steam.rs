@@ -6,7 +6,8 @@ use std::time::Duration;
 
 const INFO_URL: &str = "https://api.steamcmd.net/v1/info";
 const STORE_URL: &str = "https://store.steampowered.com/api/appdetails";
-const USER_AGENT: &str = "SteamPress/0.1";
+const SEARCH_URL: &str = "https://store.steampowered.com/api/storesearch";
+const USER_AGENT: &str = "SteamPress/0.3";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DepotEntry {
@@ -24,6 +25,12 @@ pub struct AppInfo {
     pub build_id: String,
     pub build_time: Option<DateTime<Utc>>,
     pub depots: Vec<DepotEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoreSearchItem {
+    pub appid: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,7 +170,7 @@ pub fn parse_store_info(appid: &str, json: &str) -> Result<StoreInfo, String> {
         .get(appid)
         .ok_or_else(|| format!("no store data for {appid}"))?;
     if !app.get("success").and_then(Value::as_bool).unwrap_or(false) {
-        return Err(format!("fiche store indisponible pour {appid}"));
+        return Err(format!("store entry unavailable for {appid}"));
     }
     let data = app
         .get("data")
@@ -191,6 +198,59 @@ pub fn fetch_store_info(appid: &str) -> Result<StoreInfo, String> {
     let url = format!("{STORE_URL}?appids={appid}");
     let body = get_text(&url)?;
     parse_store_info(appid, &body)
+}
+
+/// Searches the public Steam store by game name.
+pub fn search_store(term: &str) -> Result<Vec<StoreSearchItem>, String> {
+    let term = term.trim();
+    if term.len() < 2 {
+        return Ok(Vec::new());
+    }
+    let response = client()?
+        .get(SEARCH_URL)
+        .query(&[("term", term), ("l", "english"), ("cc", "US")])
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .send()
+        .map_err(|error| format!("Steam search failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Steam search returned HTTP {}", response.status()));
+    }
+    let body = response
+        .text()
+        .map_err(|error| format!("unreadable Steam search response: {error}"))?;
+    parse_store_search(&body)
+}
+
+pub fn parse_store_search(json: &str) -> Result<Vec<StoreSearchItem>, String> {
+    let root: Value =
+        serde_json::from_str(json).map_err(|error| format!("invalid search JSON: {error}"))?;
+    let items = root
+        .get("items")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "Steam search returned no items".to_string())?;
+    let mut results = Vec::new();
+    for item in items {
+        let Some(appid) = item
+            .get("id")
+            .and_then(number_or_string)
+            .filter(|value| value.parse::<u64>().is_ok())
+        else {
+            continue;
+        };
+        let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+        if name.is_empty()
+            || results
+                .iter()
+                .any(|entry: &StoreSearchItem| entry.appid == appid)
+        {
+            continue;
+        }
+        results.push(StoreSearchItem {
+            appid,
+            name: name.to_string(),
+        });
+    }
+    Ok(results)
 }
 
 /// Upgrades a bare `http://` URL without mangling an existing `https://`.
@@ -236,6 +296,23 @@ mod tests {
             Some("https://www.playbalatro.com")
         );
         assert!(store.short_description.starts_with("The poker"));
+    }
+
+    #[test]
+    fn parses_store_search_results() {
+        let json = r#"{
+            "total": 2,
+            "items": [
+                {"type": "app", "name": "Balatro", "id": 2379780},
+                {"type": "app", "name": "Balatro Soundtrack", "id": 2834460},
+                {"type": "app", "name": "Broken", "id": "not-a-number"}
+            ]
+        }"#;
+        let results = parse_store_search(json).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].appid, "2379780");
+        assert_eq!(results[0].name, "Balatro");
+        assert_eq!(results[1].name, "Balatro Soundtrack");
     }
 
     #[test]
