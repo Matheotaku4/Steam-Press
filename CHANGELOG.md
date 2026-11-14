@@ -4,6 +4,28 @@ All notable changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] - 2026-11-14
+
+### Added
+
+- `doctor` now probes installed tool versions and enforces the documented
+  minimums for 7-Zip 21.0, RAR 6.0 and DepotDownloader 3.0.0. SteamCMD has no
+  stable semantic version and is checked for presence. Missing tools and
+  outdated versions include a corrective action naming the right setting.
+- Contract snapshots for the stable `--json` output of `queue list`,
+  `workshop list`, `depots list`, `login`, `template render`, `diff` and CLI
+  errors, so a field change fails CI.
+- Tests for Steam Guard and interrupted fake downloads.
+
+### Fixed
+
+- `workshop list --json` no longer prints a human-readable line before the
+  JSON document when the queue is empty.
+- A cancellation arriving between the preflight and the start of the download
+  is no longer lost.
+- Steam Guard messages from SteamCMD are now reported as Steam Guard instead
+  of a generic exit-code failure.
+
 ## [1.0.1] - 2026-11-14
 
 ### Fixed

@@ -59,6 +59,61 @@ pub fn write_private(path: &Path, contents: &str) -> io::Result<()> {
     }
 }
 
+/// Returns the first version-looking token in a tool's output, for example
+/// `7-Zip 25.01` or `DepotDownloader v3.4.0`.
+pub fn probe_version(path: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new(path).args(args).output().ok()?;
+    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+    text.push('\n');
+    text.push_str(&String::from_utf8_lossy(&output.stderr));
+    first_version(&text)
+}
+
+fn first_version(text: &str) -> Option<String> {
+    for token in text.split(|character: char| character.is_whitespace()) {
+        let candidate = token
+            .trim_matches(|character: char| !character.is_ascii_alphanumeric() && character != '.');
+        let candidate = candidate
+            .trim_start_matches('v')
+            .trim_start_matches('V')
+            .split('+')
+            .next()
+            .unwrap_or("");
+        let mut parts = candidate.split('.');
+        let first = parts.next()?;
+        if first.is_empty() || !first.chars().all(|character| character.is_ascii_digit()) {
+            continue;
+        }
+        if parts.clone().count() > 2
+            || parts.any(|part| part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()))
+        {
+            continue;
+        }
+        return Some(candidate.to_string());
+    }
+    None
+}
+
+/// Compares dotted numeric versions, padding missing components with zero.
+pub fn version_at_least(found: &str, minimum: &str) -> bool {
+    let parse = |value: &str| -> Option<Vec<u64>> {
+        value
+            .split('.')
+            .map(|part| part.parse::<u64>().ok())
+            .collect::<Option<Vec<_>>>()
+    };
+    let (Some(mut found), Some(mut minimum)) = (parse(found), parse(minimum)) else {
+        return false;
+    };
+    while found.len() < minimum.len() {
+        found.push(0);
+    }
+    while minimum.len() < found.len() {
+        minimum.push(0);
+    }
+    found >= minimum
+}
+
 /// Opens a directory in the platform file manager.
 pub fn open_folder(path: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]
@@ -98,6 +153,23 @@ mod tests {
         write_private(&path, "secret").unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn reads_and_compares_tool_versions() {
+        assert_eq!(
+            first_version("7-Zip (z) 25.01 (x64)").as_deref(),
+            Some("25.01")
+        );
+        assert_eq!(
+            first_version("DepotDownloader v3.4.0+c553ef4").as_deref(),
+            Some("3.4.0")
+        );
+        assert_eq!(first_version("no version here"), None);
+        assert!(version_at_least("25.01", "21.0"));
+        assert!(version_at_least("3.4.0", "3.0"));
+        assert!(!version_at_least("2.9", "3.0"));
+        assert!(!version_at_least("unknown", "1.0"));
     }
 
     #[test]

@@ -288,6 +288,29 @@ mod tests {
         assert!(!work_dir.join(".DepotDownloader").exists());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn reports_a_fake_sidecar_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = crate::test_support::temp_dir("depotdownloader-failure");
+        let script = dir.join("fake-DepotDownloader.sh");
+        std::fs::write(&script, "#!/bin/sh\necho 'Invalid Password'\nexit 3\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut request = DownloadRequest::for_job(
+            GameJob::new(Platform::Linux64, "2379780"),
+            Credentials::anonymous(),
+            dir.join("work"),
+        );
+        request.install_dir = Some("Spacewar".to_string());
+        let mut downloader = DepotDownloader::new(Some(script));
+        match downloader.download(&request, &EventSink::noop()) {
+            Err(DownloadError::Failed(message)) => assert!(message.contains("code 3")),
+            other => panic!("expected a sidecar failure, got {other:?}"),
+        }
+    }
+
     #[test]
     fn builds_args_for_selected_depots() {
         let mut request = DownloadRequest::for_job(

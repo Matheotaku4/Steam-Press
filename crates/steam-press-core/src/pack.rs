@@ -403,10 +403,19 @@ impl Packer {
                 build_id: String::new(),
             }
         } else {
+            // `cancel()` may arrive after the pre-download check and before
+            // the downloader is created. Re-check here so the cancellation
+            // is not lost in that race.
+            if self.cancel.is_cancelled() {
+                return self.cancelled(job, stem, started, preflight, &sink);
+            }
             let mut downloader =
                 downloader::create(self.options.downloader_kind, &self.options.settings);
             if let Ok(mut slot) = self.active_cancel.lock() {
                 *slot = Some(downloader.cancel_token());
+                if self.cancel.is_cancelled() {
+                    downloader.cancel();
+                }
             }
 
             let request = DownloadRequest {
@@ -996,7 +1005,7 @@ mod tests {
             Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/appmanifest_2379780.acf");
         let script = dir.join("fake-steamcmd.sh");
         let body = format!(
-            "#!/bin/sh\nset -eu\ndir=\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    +force_install_dir) dir=\"$2\"; shift 2 ;;\n    +runscript) shift 2 ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p \"$dir/steamapps/common/Balatro\"\nprintf 'game' > \"$dir/steamapps/common/Balatro/game.bin\"\ncp '{}' \"$dir/steamapps/appmanifest_2379780.acf\"\necho \"Success! App '2379780' fully installed.\"\nexit {}\n",
+            "#!/bin/sh\nset -eu\ndir=\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    +force_install_dir) dir=\"$2\"; shift 2 ;;\n    +runscript) shift 2 ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p \"$dir/steamapps/common/Balatro\"\nprintf 'game' > \"$dir/steamapps/common/Balatro/game.bin\"\ncp '{}' \"$dir/steamapps/appmanifest_2379780.acf\"\necho \"Update state (0x61) downloading, progress: 50.00 (100 / 200)\"\necho \"Success! App '2379780' fully installed.\"\nexit {}\n",
             fixture.display(),
             exit_code
         );
@@ -1014,15 +1023,20 @@ mod tests {
         options.settings.skip_compression = true;
         options.settings.verify_archives = false;
         let packer = Packer::with_preflight(options, Arc::new(fixture_preflight));
-        let outcome = packer.run(
-            &GameJob::new(Platform::Linux64, "2379780"),
-            EventSink::noop(),
-        );
+        let (sink, receiver) = EventSink::channel();
+        let outcome = packer.run(&GameJob::new(Platform::Linux64, "2379780"), sink);
         assert!(
             matches!(outcome.status, PackStatus::Completed),
             "{:?}",
             outcome.status
         );
+        let mut saw_progress = false;
+        while let Ok(event) = receiver.try_recv() {
+            if let PackEvent::Log(line) = event {
+                saw_progress |= line.contains("progress: 50.00");
+            }
+        }
+        assert!(saw_progress, "fake SteamCMD progress was not forwarded");
         let output = outcome.output.unwrap();
         assert!(output.join("steamapps/common/Balatro/game.bin").is_file());
         assert!(output.join("steamapps/appmanifest_2379780.acf").is_file());
@@ -1071,6 +1085,46 @@ mod tests {
     }
 
     #[cfg(unix)]
+    fn fake_steamcmd_error(dir: &Path, message: &str, exit_code: i32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = dir.join("fake-steamcmd-error.sh");
+        fs::write(
+            &script,
+            format!("#!/bin/sh\necho '{message}'\nexit {exit_code}\n"),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn maps_fake_steamcmd_error_outputs() {
+        for (message, expected) in [
+            ("No subscription", "does not own"),
+            ("Invalid Password", "invalid Steam credentials"),
+            ("Rate Limit Exceeded", "rate limiting"),
+            ("Steam Guard required", "Steam Guard"),
+            ("Failed to connect to Steam", "network error"),
+        ] {
+            let dir = temp_dir(&format!("pack-fake-error-{}", expected.len()));
+            let mut options = PackOptions::for_tests(&dir);
+            options.settings.steamcmd_path = Some(fake_steamcmd_error(&dir, message, 1));
+            options.settings.skip_compression = true;
+            let packer = Packer::with_preflight(options, Arc::new(fixture_preflight));
+            let outcome = packer.run(
+                &GameJob::new(Platform::Linux64, "2379780"),
+                EventSink::noop(),
+            );
+            match outcome.status {
+                PackStatus::Failed(text) => assert!(text.contains(expected), "{text}"),
+                other => panic!("expected failure for {message}, got {other:?}"),
+            }
+        }
+    }
+
+    #[cfg(unix)]
     #[test]
     fn reports_a_fake_steamcmd_failure() {
         let dir = temp_dir("pack-fake-steamcmd-failure");
@@ -1086,6 +1140,49 @@ mod tests {
             PackStatus::Failed(message) => assert!(message.contains("code 3"), "{message}"),
             other => panic!("expected failure, got {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancels_a_running_fake_download() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = temp_dir("pack-fake-cancel");
+        let script = dir.join("slow-steamcmd.sh");
+        fs::write(&script, "#!/bin/sh\necho 'Downloading...'\nsleep 30\n").unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut options = PackOptions::for_tests(&dir);
+        options.settings.steamcmd_path = Some(script);
+        options.settings.skip_compression = true;
+        let packer = Arc::new(Packer::with_preflight(options, Arc::new(fixture_preflight)));
+        let (sink, receiver) = EventSink::channel();
+        let worker = {
+            let packer = Arc::clone(&packer);
+            std::thread::spawn(move || {
+                packer.run(&GameJob::new(Platform::Linux64, "2379780"), sink)
+            })
+        };
+
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(5) {
+            if matches!(
+                receiver.recv_timeout(Duration::from_millis(100)),
+                Ok(PackEvent::Stage {
+                    stage: Stage::Download,
+                    ..
+                })
+            ) {
+                break;
+            }
+        }
+        packer.cancel();
+        let outcome = worker.join().unwrap();
+        assert!(
+            matches!(outcome.status, PackStatus::Cancelled),
+            "{:?}",
+            outcome.status
+        );
     }
 
     #[test]

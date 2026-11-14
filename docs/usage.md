@@ -29,8 +29,11 @@ cargo build --release -p steam-press-cli
 ```
 
 `doctor` doit afficher les chemins de SteamCMD et 7-Zip, le nombre de dépôts connus, un
-dossier de sortie inscriptible, l'espace libre, l'état du coffre d'identifiants et la
-joignabilité de l'API Steam. Les codes de sortie sont documentés dans
+dossier de sortie inscriptible, l'espace libre, l'état du coffre d'identifiants, la
+joignabilité de l'API Steam, la présence de SteamCMD et les versions de 7-Zip,
+RAR et DepotDownloader (minimums : 21.0, 6.0 et 3.0.0). SteamCMD n'expose pas
+de version sémantique stable : seule sa présence est vérifiée. Une version trop
+ancienne ou un outil absent est signalé avec l'action corrective correspondante. Les codes de sortie sont documentés dans
 [exit-codes.md](exit-codes.md).
 
 ## 3. File de jeux

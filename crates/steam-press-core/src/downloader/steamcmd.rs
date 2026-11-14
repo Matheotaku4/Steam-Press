@@ -238,6 +238,18 @@ pub fn classify_run(
     if combined.contains("Invalid Password") {
         return Err(DownloadError::InvalidCredentials);
     }
+    let lower = combined.to_ascii_lowercase();
+    if lower.contains("steam guard") {
+        return Err(DownloadError::SteamGuardRequired);
+    }
+    if lower.contains("failed to connect")
+        || lower.contains("connection timeout")
+        || lower.contains("no connection")
+    {
+        return Err(DownloadError::Failed(
+            "could not reach Steam (network error); check the proxy and firewall".to_string(),
+        ));
+    }
     if exit_code != 0 {
         if !has_sitelicense && !has_compat_log {
             return Err(DownloadError::SteamGuardRequired);
@@ -325,6 +337,14 @@ mod tests {
             classify_run(0, "", "Invalid Password", true, true),
             Err(DownloadError::InvalidCredentials)
         );
+        assert_eq!(
+            classify_run(1, "Steam Guard required", "", true, true),
+            Err(DownloadError::SteamGuardRequired)
+        );
+        match classify_run(1, "Failed to connect to Steam", "", true, true) {
+            Err(DownloadError::Failed(message)) => assert!(message.contains("network error")),
+            other => panic!("expected a network failure, got {other:?}"),
+        }
         assert_eq!(
             classify_run(0, "Success! App '2379780' fully installed.", "", true, true),
             Ok(())

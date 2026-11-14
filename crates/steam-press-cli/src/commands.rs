@@ -20,6 +20,7 @@ use steam_press_core::queue::{
     WorkshopJob,
 };
 use steam_press_core::template::{self, TemplateData};
+use steam_press_core::tooling;
 use steam_press_core::workshop::WorkshopPacker;
 use steam_press_core::{steam, Platform};
 
@@ -84,6 +85,14 @@ pub fn dispatch(cli: Cli) -> Result<ExitCode, String> {
     }
 }
 
+fn version_hint(found: &str, minimum: &str) -> String {
+    if tooling::version_at_least(found, minimum) {
+        format!("(minimum {minimum})")
+    } else {
+        format!("is older than {minimum}; update the tool")
+    }
+}
+
 fn doctor(cli: &Cli) -> Result<ExitCode, String> {
     let (paths, settings) = support::load_settings(cli)?;
     let output = settings.output_dir(&paths);
@@ -98,6 +107,24 @@ fn doctor(cli: &Cli) -> Result<ExitCode, String> {
     let sevenzip = archive::compressor_binary(Compressor::SevenZip, &settings).ok();
     let rar = archive::compressor_binary(Compressor::Rar, &settings).ok();
     let names = support::depot_names(&paths);
+    let sevenzip_version = sevenzip
+        .as_deref()
+        .and_then(|path| tooling::probe_version(path, &["i"]));
+    let rar_version = rar
+        .as_deref()
+        .and_then(|path| tooling::probe_version(path, &["-?"]));
+    let depotdownloader_version = depotdownloader
+        .path
+        .as_deref()
+        .and_then(|path| tooling::probe_version(path, &["--version"]));
+    let version_info = |found: Option<&str>, minimum: &str| {
+        let ok = found.map(|version| tooling::version_at_least(version, minimum));
+        serde_json::json!({
+            "found": found,
+            "minimum": minimum,
+            "ok": ok,
+        })
+    };
     let disk_free = config::available_space(&output).ok();
     let store = CredentialStore::new(&paths);
     let credentials_present = store.exists();
@@ -125,6 +152,19 @@ fn doctor(cli: &Cli) -> Result<ExitCode, String> {
             "sevenzip": sevenzip.map(|path| path.display().to_string()),
             "rar": rar.map(|path| path.display().to_string()),
             "knownDepots": names.len(),
+            "toolVersions": {
+                "sevenzip": version_info(sevenzip_version.as_deref(), "21.0"),
+                "rar": version_info(rar_version.as_deref(), "6.0"),
+                "depotdownloader": version_info(
+                    depotdownloader_version.as_deref(),
+                    "3.0.0"
+                ),
+                "steamcmd": serde_json::json!({
+                    "found": null,
+                    "minimum": null,
+                    "ok": null
+                }),
+            },
             "diskFreeBytes": disk_free,
             "credentials": {
                 "present": credentials_present,
@@ -142,17 +182,41 @@ fn doctor(cli: &Cli) -> Result<ExitCode, String> {
     println!("Work    : {}", paths.work_dir.display());
     println!("Output  : {}", output.display());
     println!("Archiver: {}", settings.compressor.label());
-    for (label, status) in [("SteamCMD", steamcmd), ("DepotDownloader", depotdownloader)] {
+    for (label, status, key) in [
+        ("SteamCMD", steamcmd, "steamcmdpath"),
+        ("DepotDownloader", depotdownloader, "depotdownloaderpath"),
+    ] {
         match status.path {
             Some(path) => println!("{label:<14}: {}", path.display()),
-            None => println!("{label:<14}: not found"),
+            None => println!(
+                "{label:<14}: {} (install it or set {key} in settings)",
+                status.detail
+            ),
         }
     }
-    for (label, path) in [("7-Zip", sevenzip), ("RAR", rar)] {
+    for (label, path, key) in [("7-Zip", sevenzip, "sevenzippath"), ("RAR", rar, "rarpath")] {
         match path {
             Some(path) => println!("{label:<14}: {}", path.display()),
-            None => println!("{label:<14}: not found"),
+            None => println!("{label:<14}: not found (install it or set {key} in settings)"),
         }
+    }
+    if let Some(version) = &sevenzip_version {
+        println!(
+            "  7-Zip version : {version} {}",
+            version_hint(version, "21.0")
+        );
+    }
+    if let Some(version) = &rar_version {
+        println!(
+            "  RAR version   : {version} {}",
+            version_hint(version, "6.0")
+        );
+    }
+    if let Some(version) = &depotdownloader_version {
+        println!(
+            "  DepotDownloader version: {version} {}",
+            version_hint(version, "3.0.0")
+        );
     }
     println!("Known depots: {}", names.len());
     println!("Output  : writable");
@@ -161,20 +225,24 @@ fn doctor(cli: &Cli) -> Result<ExitCode, String> {
             "Free    : {:.1} GiB",
             bytes as f64 / 1024.0 / 1024.0 / 1024.0
         );
+    } else {
+        println!("Free    : unknown (check the output path and its permissions)");
     }
     println!(
         "Login   : {}",
         if credentials_readable {
             "credentials readable"
         } else if credentials_present {
-            "credentials present but unreadable"
+            "credentials present but unreadable (run `steam-press login` again)"
         } else {
-            "no saved credentials"
+            "no saved credentials (run `steam-press login` or use --anonymous)"
         }
     );
     match network {
         Ok(()) => println!("Network : Steam API reachable"),
-        Err(error) => println!("Network : unavailable ({error})"),
+        Err(error) => println!(
+            "Network : unavailable ({error}; check proxy/firewall access to api.steampowered.com)"
+        ),
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -730,9 +798,6 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
         WorkshopAction::List { file } => {
             let path = workshop_queue_file(cli, file);
             let load = load_workshop_queue(&path)?;
-            if load.jobs.is_empty() {
-                println!("Queue is empty ({})", path.display());
-            }
             if cli.json {
                 print_json(serde_json::json!({
                     "ok": true, "file": path.display().to_string(),
@@ -740,6 +805,9 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
                     "warnings": load.warnings
                 }))?;
                 return Ok(ExitCode::SUCCESS);
+            }
+            if load.jobs.is_empty() {
+                println!("Queue is empty ({})", path.display());
             }
             for (index, job) in load.jobs.iter().enumerate() {
                 println!("{:>3}. {:>8} / {}", index + 1, job.appid, job.workshop_id);
@@ -957,5 +1025,12 @@ mod tests {
         let document = json_document(serde_json::json!({"ok": true, "count": 2}));
         assert_eq!(document["schemaVersion"], 1);
         assert_eq!(document["count"], 2);
+    }
+
+    #[test]
+    fn version_hints_flag_outdated_tools() {
+        assert_eq!(version_hint("21.0", "21.0"), "(minimum 21.0)");
+        assert_eq!(version_hint("23.01", "21.0"), "(minimum 21.0)");
+        assert!(version_hint("16.02", "21.0").contains("older than 21.0"));
     }
 }
