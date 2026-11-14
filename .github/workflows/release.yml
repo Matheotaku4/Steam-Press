@@ -87,22 +87,25 @@ jobs:
           mkdir -p "dist/${combined}/docs"
           cp "target/release/steam-press${suffix}" "dist/${combined}/"
           cp "target/release/steam-press-gui${suffix}" "dist/${combined}/"
-          cp README.md "dist/${combined}/"
-          cp docs/usage.md "dist/${combined}/docs/"
+          cp README.md LICENSE CHANGELOG.md "dist/${combined}/"
+          cp docs/usage.md docs/migration-1.0.md docs/security-review.md \
+            docs/exit-codes.md docs/json-schema.md "dist/${combined}/docs/"
           tar -C dist -czf "dist/${combined}.tar.gz" "${combined}"
 
           cli="steam-press-cli-${version}-${platform}"
           mkdir -p "dist/${cli}/docs"
           cp "target/release/steam-press${suffix}" "dist/${cli}/"
-          cp README.md "dist/${cli}/"
-          cp docs/usage.md "dist/${cli}/docs/"
+          cp README.md LICENSE CHANGELOG.md "dist/${cli}/"
+          cp docs/usage.md docs/migration-1.0.md docs/security-review.md \
+            docs/exit-codes.md docs/json-schema.md "dist/${cli}/docs/"
           tar -C dist -czf "dist/${cli}.tar.gz" "${cli}"
 
           gui="steam-press-gui-${version}-${platform}"
           mkdir -p "dist/${gui}/docs"
           cp "target/release/steam-press-gui${suffix}" "dist/${gui}/"
-          cp README.md "dist/${gui}/"
-          cp docs/usage.md "dist/${gui}/docs/"
+          cp README.md LICENSE CHANGELOG.md "dist/${gui}/"
+          cp docs/usage.md docs/migration-1.0.md docs/security-review.md \
+            docs/exit-codes.md docs/json-schema.md "dist/${gui}/docs/"
           tar -C dist -czf "dist/${gui}.tar.gz" "${gui}"
 
           checksum() {

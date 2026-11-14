@@ -170,6 +170,25 @@ fn walk(root: &Path, directory: &Path, files: &mut BTreeMap<String, FileMeta>) -
     Ok(())
 }
 
+/// Name of the manifest listing files removed from the new build.
+pub const DELETED_MANIFEST: &str = "deleted_files.txt";
+
+/// Writes the list of removed files so consumers can apply deletions after
+/// extracting the update archive.
+pub fn write_deleted_manifest(report: &DiffReport, destination: &Path) -> io::Result<bool> {
+    if report.removed.is_empty() {
+        return Ok(false);
+    }
+    let mut content =
+        String::from("# Files present in the old build and absent from the new build.\n");
+    for change in &report.removed {
+        content.push_str(&change.path);
+        content.push('\n');
+    }
+    fs::write(destination.join(DELETED_MANIFEST), content)?;
+    Ok(true)
+}
+
 /// Copies added and modified files into a staging directory.
 pub fn stage_changes(new: &Path, report: &DiffReport, destination: &Path) -> io::Result<usize> {
     let mut copied = 0;
@@ -219,6 +238,8 @@ pub fn create_update_archive(
     fs::create_dir_all(&staging).map_err(|error| PipelineError::Io(error.to_string()))?;
     stage_changes(new, &report, &staging)
         .map_err(|error| PipelineError::Io(format!("stage update: {error}")))?;
+    write_deleted_manifest(&report, &staging)
+        .map_err(|error| PipelineError::Io(format!("deleted manifest: {error}")))?;
 
     let output = match compress_directory(
         settings,
@@ -266,6 +287,53 @@ mod tests {
         assert_eq!(report.modified.len(), 1);
         assert_eq!(report.removed.len(), 1);
         assert_eq!(report.modified[0].path, "bin/game");
+    }
+
+    #[test]
+    fn writes_removed_files_for_the_update_archive() {
+        let root = temp_dir("diff-deleted");
+        let old = root.join("old");
+        let new = root.join("new");
+        let stage = root.join("stage");
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::create_dir_all(&stage).unwrap();
+        fs::write(old.join("removed.txt"), b"old").unwrap();
+        let report = diff_directories(&old, &new).unwrap();
+        assert!(write_deleted_manifest(&report, &stage).unwrap());
+        let manifest = fs::read_to_string(stage.join(DELETED_MANIFEST)).unwrap();
+        assert!(manifest.contains("removed.txt"));
+    }
+
+    #[test]
+    fn creates_an_update_directory_with_the_deleted_manifest() {
+        let root = temp_dir("diff-archive-deleted");
+        let old = root.join("old");
+        let new = root.join("new");
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&new).unwrap();
+        fs::write(old.join("removed.txt"), b"old").unwrap();
+        fs::write(new.join("added.txt"), b"new").unwrap();
+        let paths = Paths::under(&root);
+        let settings = Settings {
+            output_dir: Some(root.join("out")),
+            skip_compression: true,
+            verify_archives: false,
+            ..Default::default()
+        };
+        let archive = create_update_archive(
+            &settings,
+            &paths,
+            &old,
+            &new,
+            "Game.patch",
+            &EventSink::noop(),
+        )
+        .unwrap();
+        let output = archive.output.unwrap();
+        assert!(output.join("added.txt").is_file());
+        let manifest = fs::read_to_string(output.join(DELETED_MANIFEST)).unwrap();
+        assert!(manifest.contains("removed.txt"));
     }
 
     #[test]

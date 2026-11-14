@@ -216,10 +216,25 @@ impl HistoryEntry {
     }
 }
 
+pub const HISTORY_FORMAT_VERSION: u32 = 1;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryFile {
+    #[serde(default)]
+    format_version: u32,
+    entries: Vec<HistoryEntry>,
+}
+
 pub fn load_history(path: impl AsRef<Path>) -> Vec<HistoryEntry> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
+    let Some(text) = std::fs::read_to_string(path).ok() else {
+        return Vec::new();
+    };
+    if let Ok(entries) = serde_json::from_str::<Vec<HistoryEntry>>(&text) {
+        return entries;
+    }
+    serde_json::from_str::<HistoryFile>(&text)
+        .map(|file| file.entries)
         .unwrap_or_default()
 }
 
@@ -230,7 +245,11 @@ pub fn save_history(path: impl AsRef<Path>, history: &[HistoryEntry]) -> Result<
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
     }
-    let text = serde_json::to_string_pretty(history).map_err(|error| error.to_string())?;
+    let file = HistoryFile {
+        format_version: HISTORY_FORMAT_VERSION,
+        entries: history.to_vec(),
+    };
+    let text = serde_json::to_string_pretty(&file).map_err(|error| error.to_string())?;
     std::fs::write(path, text).map_err(|error| error.to_string())
 }
 
@@ -300,8 +319,14 @@ mod tests {
             ),
         ];
         save_history(&path, &entries).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("\"formatVersion\": 1"));
         let loaded = load_history(&path);
         assert_eq!(loaded.len(), 2);
+        assert!(load_history(dir.join("missing.json")).is_empty());
+        let legacy_path = dir.join("legacy-history.json");
+        std::fs::write(&legacy_path, serde_json::to_string(&entries).unwrap()).unwrap();
+        assert_eq!(load_history(&legacy_path).len(), 2);
         assert_eq!(loaded[0].label(), "10 · Linux x64");
         assert!(loaded[1].is_failed());
     }

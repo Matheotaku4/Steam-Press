@@ -17,6 +17,7 @@ use crate::config::Paths;
 
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
+const FORMAT_MAGIC: &str = "SPV1:";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SavedCredentials {
@@ -115,7 +116,7 @@ impl CredentialStore {
             credentials.username.trim(),
             credentials.password.as_deref().unwrap_or("")
         );
-        let encoded = encrypt(&payload, key)?;
+        let encoded = format!("{FORMAT_MAGIC}{}", encrypt(&payload, key)?);
         write_private(&self.path, &encoded).map_err(|error| error.to_string())
     }
 
@@ -124,10 +125,13 @@ impl CredentialStore {
             return Ok(None);
         }
         let encoded = fs::read_to_string(&self.path).map_err(|error| error.to_string())?;
-        if encoded.trim().is_empty() {
+        let encoded = encoded.trim();
+        if encoded.is_empty() {
             return Ok(None);
         }
-        let plaintext = decrypt(&encoded, key)?;
+        // 0.x vaults did not have the magic prefix; keep reading them.
+        let encoded = encoded.strip_prefix(FORMAT_MAGIC).unwrap_or(encoded);
+        let plaintext = decrypt(encoded, key)?;
         let mut lines = plaintext.lines();
         let username = lines.next().unwrap_or("").trim().to_string();
         if username.is_empty() {
@@ -196,6 +200,19 @@ mod tests {
         assert_eq!(store.load(&key).unwrap(), Some(credentials));
         store.clear().unwrap();
         assert_eq!(store.load(&key).unwrap(), None);
+    }
+
+    #[test]
+    fn reads_legacy_vaults_without_the_format_prefix() {
+        let dir = crate::test_support::temp_dir("credentials-legacy");
+        let path = dir.join("credentials.bin");
+        let key = generate_key();
+        let encoded = encrypt("legacy\nsecret", &key).unwrap();
+        write_private(&path, &encoded).unwrap();
+        let store = CredentialStore::at(path);
+        let loaded = store.load(&key).unwrap().unwrap();
+        assert_eq!(loaded.username, "legacy");
+        assert_eq!(loaded.password.as_deref(), Some("secret"));
     }
 
     #[test]

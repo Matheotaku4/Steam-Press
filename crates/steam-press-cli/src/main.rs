@@ -306,7 +306,14 @@ fn main() -> ExitCode {
         Ok(code) => code,
         Err(message) => {
             if json {
-                println!("{}", serde_json::json!({"ok": false, "error": message}));
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "schemaVersion": commands::JSON_SCHEMA_VERSION,
+                        "ok": false,
+                        "error": message
+                    })
+                );
             } else {
                 eprintln!("steam-press : {message}");
             }
@@ -325,6 +332,12 @@ mod tests {
         Cli::command().debug_assert();
         let matches = Cli::try_parse_from(["steam-press", "depots", "lookup", "10"]).unwrap();
         assert!(matches!(matches.command, Command::Depots { .. }));
+    }
+
+    #[test]
+    fn unknown_commands_use_the_usage_exit_code() {
+        let error = Cli::try_parse_from(["steam-press", "not-a-command"]).unwrap_err();
+        assert_eq!(error.exit_code(), 2);
     }
 
     #[test]

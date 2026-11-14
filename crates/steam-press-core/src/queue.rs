@@ -218,8 +218,13 @@ fn write_queue(path: impl AsRef<Path>, content: &str) -> Result<(), String> {
     fs::write(path, content).map_err(|error| error.to_string())
 }
 
+/// Optional comment identifying the Steam Press queue format. Older files
+/// without it are still valid and are read as format version 1.
+pub const QUEUE_FORMAT_HEADER: &str = "; steam-press-format=1";
+
 pub fn save_game_queue(path: impl AsRef<Path>, jobs: &[GameJob]) -> Result<(), String> {
-    let mut content = String::new();
+    let mut content = String::from(QUEUE_FORMAT_HEADER);
+    content.push('\n');
     for job in jobs {
         content.push_str(&job.encode());
         content.push('\n');
@@ -228,7 +233,8 @@ pub fn save_game_queue(path: impl AsRef<Path>, jobs: &[GameJob]) -> Result<(), S
 }
 
 pub fn save_workshop_queue(path: impl AsRef<Path>, jobs: &[WorkshopJob]) -> Result<(), String> {
-    let mut content = String::new();
+    let mut content = String::from(QUEUE_FORMAT_HEADER);
+    content.push('\n');
     for job in jobs {
         content.push_str(&job.encode());
         content.push('\n');
@@ -289,6 +295,19 @@ mod tests {
             .unwrap()
             .jobs
             .is_empty());
+    }
+
+    #[test]
+    fn saves_the_format_header_and_loads_legacy_files() {
+        let dir = crate::test_support::temp_dir("queue-format");
+        let path = dir.join("queue.sspq");
+        save_game_queue(&path, &[GameJob::new(Platform::Linux64, "42")]).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.starts_with(QUEUE_FORMAT_HEADER));
+        assert_eq!(load_game_queue(&path).unwrap().jobs.len(), 1);
+
+        let legacy = parse_game_queue("lin64|99|public|\n");
+        assert_eq!(legacy.jobs.len(), 1);
     }
 
     #[test]

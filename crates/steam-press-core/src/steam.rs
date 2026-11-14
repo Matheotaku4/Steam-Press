@@ -49,6 +49,25 @@ fn client() -> Result<reqwest::blocking::Client, String> {
         .map_err(|error| format!("HTTP client failed: {error}"))
 }
 
+/// Checks that the Steam Web API is reachable. Used by `doctor`; failures are
+/// reported as a diagnostic, not as a hard error.
+pub fn check_network() -> Result<(), String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|error| format!("HTTP client failed: {error}"))?;
+    let response = client
+        .get("https://api.steampowered.com/ISteamWebAPIUtil/GetServerInfo/v1/")
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .send()
+        .map_err(|error| format!("Steam network check failed: {error}"))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(format!("Steam network check: HTTP {}", response.status()))
+    }
+}
+
 fn get_text(url: &str) -> Result<String, String> {
     let response = client()?
         .get(url)

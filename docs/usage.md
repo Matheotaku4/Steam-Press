@@ -28,8 +28,10 @@ cargo build --release -p steam-press-cli
 ./target/release/steam-press depots sync
 ```
 
-`doctor` doit afficher les chemins de SteamCMD, 7-Zip, le nombre de dépôts connus et un
-dossier de sortie inscriptible.
+`doctor` doit afficher les chemins de SteamCMD et 7-Zip, le nombre de dépôts connus, un
+dossier de sortie inscriptible, l'espace libre, l'état du coffre d'identifiants et la
+joignabilité de l'API Steam. Les codes de sortie sont documentés dans
+[exit-codes.md](exit-codes.md).
 
 ## 3. File de jeux
 
@@ -121,8 +123,9 @@ steam-press diff ./build-a ./build-b --json
 
 `import` lit les métadonnées Steam, prépare les manifestes et compresse le dossier fourni.
 `diff` compare les tailles et les empreintes SHA-256, affiche les fichiers ajoutés, modifiés et
-supprimés, puis peut copier les ajouts/modifications dans une archive. Les suppressions sont
-signalées mais ne sont pas incluses dans l'archive de mise à jour.
+supprimés, puis peut copier les ajouts/modifications dans une archive. Quand des fichiers ont
+été supprimés, l'archive contient aussi `deleted_files.txt` ; il faut appliquer cette liste
+après extraction pour que l'ancienne build soit réellement remplacée.
 
 ## 6. Atelier
 
@@ -182,6 +185,7 @@ Les clés de `settings.ini` restent compatibles avec SuperSteamPacker :
 
 ```ini
 [SSP]
+formatversion=1
 compressor=7z
 customcompressoption=
 skipcompression=0
@@ -231,3 +235,7 @@ d'un job terminé, de consulter son journal et de le relancer.
 - Les mots de passe ne sont jamais journalisés et ne sont pas passés en argument de
   processus à DepotDownloader.
 - Le script SteamCMD temporaire est lui aussi créé en `0600` puis supprimé.
+
+Le modèle de menace complet et les limites du coffre sont décrits dans
+[security-review.md](security-review.md). La sortie `--json` et sa version de schéma sont
+décrites dans [json-schema.md](json-schema.md).

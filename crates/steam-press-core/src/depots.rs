@@ -102,7 +102,7 @@ impl DepotNames {
     }
 
     pub fn to_ini_string(&self) -> String {
-        let mut output = String::from("[depots]\n");
+        let mut output = String::from("; steam-press-format=1\n[depots]\n");
         for (id, name) in &self.entries {
             output.push_str(&format!("{id} = {name}\n"));
         }
@@ -172,8 +172,10 @@ mod tests {
     fn writes_a_sorted_supersteampacker_file() {
         let names = DepotNames::parse("[depots]\n20 = B\n10 = A\n");
         let text = names.to_ini_string();
-        assert_eq!(text, "[depots]\n10 = A\n20 = B\n");
+        assert_eq!(text, "; steam-press-format=1\n[depots]\n10 = A\n20 = B\n");
         assert_eq!(DepotNames::parse(&text), names);
+        let legacy = DepotNames::parse("[depots]\n10 = A\n20 = B\n");
+        assert_eq!(legacy, names);
     }
 
     #[test]

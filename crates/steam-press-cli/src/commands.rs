@@ -8,6 +8,7 @@ use std::process::ExitCode;
 
 use steam_press_core::archive;
 use steam_press_core::compressor::Compressor;
+use steam_press_core::config;
 use steam_press_core::credentials::CredentialStore;
 use steam_press_core::depots::DepotNames;
 use steam_press_core::diff;
@@ -22,7 +23,20 @@ use steam_press_core::template::{self, TemplateData};
 use steam_press_core::workshop::WorkshopPacker;
 use steam_press_core::{steam, Platform};
 
+pub const JSON_SCHEMA_VERSION: u32 = 1;
+
+fn json_document(mut value: serde_json::Value) -> serde_json::Value {
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "schemaVersion".to_string(),
+            serde_json::json!(JSON_SCHEMA_VERSION),
+        );
+    }
+    value
+}
+
 fn print_json(value: serde_json::Value) -> Result<(), String> {
+    let value = json_document(value);
     println!(
         "{}",
         serde_json::to_string_pretty(&value).map_err(|error| format!("JSON: {error}"))?
@@ -84,6 +98,12 @@ fn doctor(cli: &Cli) -> Result<ExitCode, String> {
     let sevenzip = archive::compressor_binary(Compressor::SevenZip, &settings).ok();
     let rar = archive::compressor_binary(Compressor::Rar, &settings).ok();
     let names = support::depot_names(&paths);
+    let disk_free = config::available_space(&output).ok();
+    let store = CredentialStore::new(&paths);
+    let credentials_present = store.exists();
+    let credentials_readable =
+        credentials_present && store.load(&settings.key).ok().flatten().is_some();
+    let network = steam::check_network();
 
     if cli.json {
         let tool = |status: downloader::ToolStatus| {
@@ -105,6 +125,15 @@ fn doctor(cli: &Cli) -> Result<ExitCode, String> {
             "sevenzip": sevenzip.map(|path| path.display().to_string()),
             "rar": rar.map(|path| path.display().to_string()),
             "knownDepots": names.len(),
+            "diskFreeBytes": disk_free,
+            "credentials": {
+                "present": credentials_present,
+                "readable": credentials_readable,
+            },
+            "network": {
+                "reachable": network.is_ok(),
+                "detail": network.err(),
+            },
         }))?;
         return Ok(ExitCode::SUCCESS);
     }
@@ -127,6 +156,26 @@ fn doctor(cli: &Cli) -> Result<ExitCode, String> {
     }
     println!("Known depots: {}", names.len());
     println!("Output  : writable");
+    if let Some(bytes) = disk_free {
+        println!(
+            "Free    : {:.1} GiB",
+            bytes as f64 / 1024.0 / 1024.0 / 1024.0
+        );
+    }
+    println!(
+        "Login   : {}",
+        if credentials_readable {
+            "credentials readable"
+        } else if credentials_present {
+            "credentials present but unreadable"
+        } else {
+            "no saved credentials"
+        }
+    );
+    match network {
+        Ok(()) => println!("Network : Steam API reachable"),
+        Err(error) => println!("Network : unavailable ({error})"),
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -198,10 +247,7 @@ fn info(cli: &Cli, args: &InfoArgs) -> Result<ExitCode, String> {
                 "website": store.website,
             })),
         });
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&payload).map_err(|error| format!("JSON: {error}"))?
-        );
+        print_json(payload)?;
         return Ok(ExitCode::SUCCESS);
     }
     println!("{} ({})", app.name, app.appid);
@@ -249,10 +295,7 @@ fn search(cli: &Cli, args: &SearchArgs) -> Result<ExitCode, String> {
             .iter()
             .map(|item| serde_json::json!({"appid": item.appid, "name": item.name}))
             .collect();
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&payload).map_err(|error| format!("JSON: {error}"))?
-        );
+        print_json(serde_json::json!({"ok": true, "results": payload}))?;
         return Ok(ExitCode::SUCCESS);
     }
     if results.is_empty() {
@@ -903,4 +946,16 @@ fn template_command(cli: &Cli, action: &TemplateAction) -> Result<ExitCode, Stri
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_object_document_has_the_schema_version() {
+        let document = json_document(serde_json::json!({"ok": true, "count": 2}));
+        assert_eq!(document["schemaVersion"], 1);
+        assert_eq!(document["count"], 2);
+    }
 }

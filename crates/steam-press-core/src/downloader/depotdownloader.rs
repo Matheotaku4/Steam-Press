@@ -205,6 +205,34 @@ mod tests {
     use crate::queue::GameJob;
     use std::path::Path;
 
+    #[cfg(unix)]
+    #[test]
+    fn downloads_through_a_fake_sidecar() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = crate::test_support::temp_dir("depotdownloader-fake");
+        let script = dir.join("fake-DepotDownloader.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nset -eu\ndir=\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    -dir) dir=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p \"$dir/game\"\nprintf 'downloaded' > \"$dir/game/file.bin\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let work_dir = dir.join("work");
+        let request = DownloadRequest::for_job(
+            GameJob::new(Platform::Linux64, "2379780"),
+            Credentials::anonymous(),
+            &work_dir,
+        );
+        let mut downloader = DepotDownloader::new(Some(script));
+        let report = downloader
+            .download(&request, &EventSink::noop())
+            .expect("fake download succeeds");
+        assert_eq!(report.content_dir, work_dir);
+        assert!(work_dir.join("game/file.bin").is_file());
+    }
+
     #[test]
     fn builds_args_for_selected_depots() {
         let mut request = DownloadRequest::for_job(

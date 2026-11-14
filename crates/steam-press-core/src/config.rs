@@ -3,6 +3,7 @@
 use crate::compressor::Compressor;
 use crate::credentials::generate_key;
 use crate::ini::Ini;
+use fs2::available_space as fs_available_space;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -85,6 +86,7 @@ impl Paths {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
+    pub format_version: u32,
     pub compressor: Compressor,
     pub custom_compress_options: Option<String>,
     pub skip_compression: bool,
@@ -107,6 +109,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            format_version: 1,
             compressor: Compressor::SevenZip,
             custom_compress_options: None,
             skip_compression: false,
@@ -126,6 +129,11 @@ impl Default for Settings {
             disk_margin_mb: 1024,
         }
     }
+}
+
+/// Free bytes available to the current user on the filesystem containing `path`.
+pub fn available_space(path: &Path) -> io::Result<u64> {
+    fs_available_space(path)
 }
 
 fn text(ini: &Ini, key: &str) -> String {
@@ -149,6 +157,9 @@ impl Settings {
     pub fn load(paths: &Paths) -> Self {
         let ini = Ini::load(paths.settings_file()).unwrap_or_default();
         let mut settings = Self::default();
+        if let Ok(version) = text(&ini, "formatversion").parse::<u32>() {
+            settings.format_version = version;
+        }
 
         if let Some(compressor) = Compressor::from_setting(&text(&ini, "compressor")) {
             settings.compressor = compressor;
@@ -189,6 +200,7 @@ impl Settings {
         paths.ensure()?;
         let mut ini = Ini::default();
 
+        ini.set("SSP", "formatversion", &self.format_version.to_string());
         ini.set("SSP", "compressor", self.compressor.setting());
         if let Some(options) = &self.custom_compress_options {
             ini.set("SSP", "customcompressoption", options.trim());
@@ -297,10 +309,27 @@ mod tests {
         let dir = crate::test_support::temp_dir("settings-default");
         let paths = Paths::under(&dir);
         let loaded = Settings::load(&paths);
+        assert_eq!(loaded.format_version, 1);
         assert_eq!(loaded.compressor, Compressor::SevenZip);
         assert!(loaded.dark_mode);
         assert_eq!(loaded.archive_password(), "cs.rin.ru");
         assert!(loaded.output_dir(&paths).ends_with("outputs"));
+    }
+
+    #[test]
+    fn migrates_a_settings_file_without_a_format_version() {
+        let dir = crate::test_support::temp_dir("settings-legacy");
+        let paths = Paths::under(&dir);
+        std::fs::create_dir_all(&paths.config_dir).unwrap();
+        std::fs::write(
+            paths.settings_file(),
+            "[SSP]\ncompressor=rar\nrinruusername=legacy\n",
+        )
+        .unwrap();
+        let loaded = Settings::load(&paths);
+        assert_eq!(loaded.format_version, 1);
+        assert_eq!(loaded.compressor, Compressor::Rar);
+        assert_eq!(loaded.uploader, "legacy");
     }
 
     #[test]

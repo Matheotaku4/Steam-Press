@@ -124,8 +124,14 @@ enum CheckpointStage {
     Normalized,
 }
 
+fn checkpoint_format_version() -> u32 {
+    1
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Checkpoint {
+    #[serde(default = "checkpoint_format_version")]
+    version: u32,
     stage: CheckpointStage,
     content_dir: PathBuf,
 }
@@ -143,6 +149,7 @@ fn read_checkpoint(work_dir: &Path) -> Option<(CheckpointStage, PathBuf)> {
 
 fn write_checkpoint(work_dir: &Path, stage: CheckpointStage, content_dir: &Path) -> io::Result<()> {
     let text = serde_json::to_string(&Checkpoint {
+        version: checkpoint_format_version(),
         stage,
         content_dir: content_dir.to_path_buf(),
     })
@@ -968,6 +975,75 @@ mod tests {
         let (stage, content) = read_checkpoint(&dir).unwrap();
         assert_eq!(stage, CheckpointStage::Downloaded);
         assert_eq!(content, dir.join("steamapps"));
+
+        std::fs::write(
+            checkpoint_path(&dir),
+            r#"{"stage":"downloaded","content_dir":"legacy"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_checkpoint(&dir).unwrap().0,
+            CheckpointStage::Downloaded
+        );
+    }
+
+    #[cfg(unix)]
+    fn fake_steamcmd(dir: &Path, exit_code: i32) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/appmanifest_2379780.acf");
+        let script = dir.join("fake-steamcmd.sh");
+        let body = format!(
+            "#!/bin/sh\nset -eu\ndir=\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    +force_install_dir) dir=\"$2\"; shift 2 ;;\n    +runscript) shift 2 ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p \"$dir/steamapps/common/Balatro\"\nprintf 'game' > \"$dir/steamapps/common/Balatro/game.bin\"\ncp '{}' \"$dir/steamapps/appmanifest_2379780.acf\"\necho \"Success! App '2379780' fully installed.\"\nexit {}\n",
+            fixture.display(),
+            exit_code
+        );
+        fs::write(&script, body).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn completes_with_a_fake_steamcmd_and_no_real_account() {
+        let dir = temp_dir("pack-fake-steamcmd");
+        let mut options = PackOptions::for_tests(&dir);
+        options.settings.steamcmd_path = Some(fake_steamcmd(&dir, 0));
+        options.settings.skip_compression = true;
+        options.settings.verify_archives = false;
+        let packer = Packer::with_preflight(options, Arc::new(fixture_preflight));
+        let outcome = packer.run(
+            &GameJob::new(Platform::Linux64, "2379780"),
+            EventSink::noop(),
+        );
+        assert!(
+            matches!(outcome.status, PackStatus::Completed),
+            "{:?}",
+            outcome.status
+        );
+        let output = outcome.output.unwrap();
+        assert!(output.join("steamapps/common/Balatro/game.bin").is_file());
+        assert!(output.join("steamapps/appmanifest_2379780.acf").is_file());
+        assert!(!dir.join("work").join(&outcome.stem).exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reports_a_fake_steamcmd_failure() {
+        let dir = temp_dir("pack-fake-steamcmd-failure");
+        let mut options = PackOptions::for_tests(&dir);
+        options.settings.steamcmd_path = Some(fake_steamcmd(&dir, 3));
+        options.settings.skip_compression = true;
+        let packer = Packer::with_preflight(options, Arc::new(fixture_preflight));
+        let outcome = packer.run(
+            &GameJob::new(Platform::Linux64, "2379780"),
+            EventSink::noop(),
+        );
+        match outcome.status {
+            PackStatus::Failed(message) => assert!(message.contains("code 3"), "{message}"),
+            other => panic!("expected failure, got {other:?}"),
+        }
     }
 
     #[test]

@@ -27,6 +27,24 @@ jobs:
       - name: Tests
         run: cargo test --workspace --locked
 
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install audit tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny
+      - name: Security advisories
+        run: cargo audit
+      - name: Licenses, sources and bans
+        run: cargo deny check
+      - name: Minimum supported Rust version
+        uses: dtolnay/rust-toolchain@1.88
+      - name: Check with MSRV
+        run: cargo check --workspace --all-targets --locked
+
   platform-check:
     strategy:
       fail-fast: false
