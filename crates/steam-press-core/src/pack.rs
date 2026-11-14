@@ -420,6 +420,7 @@ impl Packer {
                 },
                 credentials: self.options.credentials.clone(),
                 work_dir: work_dir.clone(),
+                install_dir: Some(install_dir_name(&preflight)),
                 depots: preflight
                     .depots
                     .iter()
@@ -1026,6 +1027,47 @@ mod tests {
         assert!(output.join("steamapps/common/Balatro/game.bin").is_file());
         assert!(output.join("steamapps/appmanifest_2379780.acf").is_file());
         assert!(!dir.join("work").join(&outcome.stem).exists());
+    }
+
+    #[cfg(unix)]
+    fn fake_depotdownloader(dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = dir.join("fake-DepotDownloader.sh");
+        fs::write(
+            &script,
+            "#!/bin/sh\nset -eu\ndir=\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    -dir) dir=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p \"$dir/.DepotDownloader\"\nprintf 'game' > \"$dir/game.bin\"\nprintf 'metadata' > \"$dir/.DepotDownloader/state\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn depotdownloader_content_lands_in_common_and_metadata_is_removed() {
+        let dir = temp_dir("pack-fake-depotdownloader");
+        let mut options = PackOptions::for_tests(&dir);
+        options.downloader_kind = DownloaderKind::DepotDownloader;
+        options.settings.depotdownloader_path = Some(fake_depotdownloader(&dir));
+        options.settings.skip_compression = true;
+        options.settings.verify_archives = false;
+        let packer = Packer::with_preflight(options, Arc::new(fixture_preflight));
+        let outcome = packer.run(
+            &GameJob::new(Platform::Linux64, "2379780"),
+            EventSink::noop(),
+        );
+        assert!(
+            matches!(outcome.status, PackStatus::Completed),
+            "{:?}",
+            outcome.status
+        );
+        let output = outcome.output.unwrap();
+        assert!(output.join("steamapps/common/Balatro/game.bin").is_file());
+        assert!(!output.join("steamapps/game.bin").exists());
+        assert!(!output.join("steamapps/.DepotDownloader").exists());
+        let acf = fs::read_to_string(output.join("steamapps/appmanifest_2379780.acf")).unwrap();
+        assert!(acf.contains("\"SizeOnDisk\"\t\t\"4\""), "{acf}");
     }
 
     #[cfg(unix)]

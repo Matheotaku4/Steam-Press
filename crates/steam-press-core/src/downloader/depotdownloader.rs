@@ -7,7 +7,7 @@ use super::{
 };
 use crate::config::Settings;
 use crate::events::{CancellationToken, EventSink, PackEvent};
-use crate::tooling;
+use crate::{naming, tooling};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -92,11 +92,10 @@ impl Downloader for DepotDownloader {
             )));
         }
 
-        let manifest = request
-            .work_dir
-            .join(format!("appmanifest_{}.acf", request.appid));
+        let content_dir = stage_download(request)?;
+        let manifest = content_dir.join(format!("appmanifest_{}.acf", request.appid));
         Ok(DownloadReport {
-            content_dir: request.work_dir.clone(),
+            content_dir,
             app_manifest: if manifest.is_file() {
                 Some(manifest)
             } else {
@@ -150,6 +149,58 @@ impl Downloader for DepotDownloader {
     fn cancel_token(&self) -> CancellationToken {
         self.cancel.clone()
     }
+}
+
+/// DepotDownloader writes the files at the root of `-dir`, unlike SteamCMD's
+/// `steamapps` layout. Move them into `steamapps/common/<installdir>` and drop
+/// the sidecar metadata so the normalizer can produce a Steam library.
+fn stage_download(request: &DownloadRequest) -> Result<PathBuf, DownloadError> {
+    let Some(raw_install_dir) = request.install_dir.as_deref() else {
+        return Ok(request.work_dir.clone());
+    };
+    let install_dir = naming::sanitize_install_dir(raw_install_dir);
+    if install_dir.is_empty() {
+        return Ok(request.work_dir.clone());
+    }
+
+    let steamapps = request.work_dir.join("steamapps");
+    let common = steamapps.join("common").join(&install_dir);
+    fs::create_dir_all(&common)
+        .map_err(|error| DownloadError::Failed(format!("content directory: {error}")))?;
+
+    let entries = fs::read_dir(&request.work_dir)
+        .map_err(|error| DownloadError::Failed(format!("content directory: {error}")))?;
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| DownloadError::Failed(format!("content directory: {error}")))?;
+        let name = entry.file_name();
+        if name == "steamapps" || name == ".DepotDownloader" {
+            continue;
+        }
+        let destination = common.join(&name);
+        if destination.exists() {
+            if destination.is_dir() {
+                fs::remove_dir_all(&destination).map_err(|error| {
+                    DownloadError::Failed(format!("staging downloaded content: {error}"))
+                })?;
+            } else {
+                fs::remove_file(&destination).map_err(|error| {
+                    DownloadError::Failed(format!("staging downloaded content: {error}"))
+                })?;
+            }
+        }
+        fs::rename(entry.path(), &destination).map_err(|error| {
+            DownloadError::Failed(format!("staging downloaded content: {error}"))
+        })?;
+    }
+
+    let metadata = request.work_dir.join(".DepotDownloader");
+    if metadata.is_dir() {
+        fs::remove_dir_all(&metadata).map_err(|error| {
+            DownloadError::Failed(format!("removing DepotDownloader metadata: {error}"))
+        })?;
+    }
+    Ok(steamapps)
 }
 
 /// Builds sidecar arguments. The password never appears here: it would be
@@ -214,23 +265,27 @@ mod tests {
         let script = dir.join("fake-DepotDownloader.sh");
         std::fs::write(
             &script,
-            "#!/bin/sh\nset -eu\ndir=\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    -dir) dir=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p \"$dir/game\"\nprintf 'downloaded' > \"$dir/game/file.bin\"\n",
+            "#!/bin/sh\nset -eu\ndir=\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    -dir) dir=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nmkdir -p \"$dir/game\" \"$dir/.DepotDownloader\"\nprintf 'downloaded' > \"$dir/game/file.bin\"\nprintf 'metadata' > \"$dir/.DepotDownloader/state\"\n",
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let work_dir = dir.join("work");
-        let request = DownloadRequest::for_job(
+        let mut request = DownloadRequest::for_job(
             GameJob::new(Platform::Linux64, "2379780"),
             Credentials::anonymous(),
             &work_dir,
         );
+        request.install_dir = Some("Spacewar".to_string());
         let mut downloader = DepotDownloader::new(Some(script));
         let report = downloader
             .download(&request, &EventSink::noop())
             .expect("fake download succeeds");
-        assert_eq!(report.content_dir, work_dir);
-        assert!(work_dir.join("game/file.bin").is_file());
+        assert_eq!(report.content_dir, work_dir.join("steamapps"));
+        assert!(work_dir
+            .join("steamapps/common/Spacewar/game/file.bin")
+            .is_file());
+        assert!(!work_dir.join(".DepotDownloader").exists());
     }
 
     #[test]

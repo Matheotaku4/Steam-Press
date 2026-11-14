@@ -89,7 +89,8 @@ jobs:
           cp "target/release/steam-press-gui${suffix}" "dist/${combined}/"
           cp README.md LICENSE CHANGELOG.md "dist/${combined}/"
           cp docs/usage.md docs/migration-1.0.md docs/security-review.md \
-            docs/exit-codes.md docs/json-schema.md "dist/${combined}/docs/"
+            docs/exit-codes.md docs/json-schema.md docs/real-test-1.0.1.md \
+            "dist/${combined}/docs/"
           tar -C dist -czf "dist/${combined}.tar.gz" "${combined}"
 
           cli="steam-press-cli-${version}-${platform}"
@@ -97,7 +98,8 @@ jobs:
           cp "target/release/steam-press${suffix}" "dist/${cli}/"
           cp README.md LICENSE CHANGELOG.md "dist/${cli}/"
           cp docs/usage.md docs/migration-1.0.md docs/security-review.md \
-            docs/exit-codes.md docs/json-schema.md "dist/${cli}/docs/"
+            docs/exit-codes.md docs/json-schema.md docs/real-test-1.0.1.md \
+            "dist/${cli}/docs/"
           tar -C dist -czf "dist/${cli}.tar.gz" "${cli}"
 
           gui="steam-press-gui-${version}-${platform}"
@@ -105,7 +107,8 @@ jobs:
           cp "target/release/steam-press-gui${suffix}" "dist/${gui}/"
           cp README.md LICENSE CHANGELOG.md "dist/${gui}/"
           cp docs/usage.md docs/migration-1.0.md docs/security-review.md \
-            docs/exit-codes.md docs/json-schema.md "dist/${gui}/docs/"
+            docs/exit-codes.md docs/json-schema.md docs/real-test-1.0.1.md \
+            "dist/${gui}/docs/"
           tar -C dist -czf "dist/${gui}.tar.gz" "${gui}"
 
           checksum() {

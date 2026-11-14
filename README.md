@@ -81,8 +81,8 @@ Linux archives are built on Ubuntu 22.04 (glibc 2.35) for broad compatibility:
 `.sha256` file, and `SHA256SUMS` covers every archive. To publish from a tag instead:
 
 ```bash
-git tag -a v1.0.0 -m "Steam Press 1.0.0"
-git push origin v1.0.0
+git tag -a v1.0.1 -m "Steam Press 1.0.1"
+git push origin v1.0.1
 ```
 
 The GUI checks the main `v*` releases on startup and from **Settings > Updates**. It downloads
@@ -205,9 +205,10 @@ The test suite is offline: Steam responses come from fixtures and no account is 
 
 ## Known limitations
 
-- No real Steam download was executed while developing this version (no account in the build
-  environment). Download engines are covered through their generated scripts/arguments and
-  log classifiers.
+- The 1.0.1 validation downloaded Spacewar (app 480) anonymously with DepotDownloader and
+  produced a verified 7z archive. SteamCMD's real download path could not run in the build
+  environment because its 32-bit loader was unavailable; it remains covered by scripts,
+  fake-engine tests and log classifiers.
 - The GUI compiles and its pages are rendered in headless tests, but it was not opened in the
   development environment (no display server).
 - Windows and macOS are compiled by CI but were not run locally; automatic updates install on

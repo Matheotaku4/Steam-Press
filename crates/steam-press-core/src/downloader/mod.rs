@@ -78,6 +78,10 @@ pub struct DownloadRequest {
     pub branch_password: Option<String>,
     pub credentials: Credentials,
     pub work_dir: PathBuf,
+    /// Steam install directory. DepotDownloader writes files at the root of
+    /// `work_dir`, so the engine uses this to recreate Steam's
+    /// `steamapps/common/<install_dir>` layout.
+    pub install_dir: Option<String>,
     pub depots: Vec<DepotSelector>,
     pub validate: bool,
 }
@@ -96,6 +100,7 @@ impl DownloadRequest {
             branch_password,
             credentials,
             work_dir: work_dir.into(),
+            install_dir: None,
             depots: Vec::new(),
             validate: true,
         }
