@@ -209,8 +209,10 @@ The test suite is offline: Steam responses come from fixtures and no account is 
   produced a verified 7z archive. SteamCMD's real download path could not run in the build
   environment because its 32-bit loader was unavailable; it remains covered by scripts,
   fake-engine tests and log classifiers.
-- The GUI compiles and its pages are rendered in headless tests, but it was not opened in the
-  development environment (no display server).
+- The GUI was exercised on Linux under X11 via Xvfb with the 1.0.2 build: all five sections
+  were opened, both themes were switched, a job was added to the queue and restored after a
+  restart. It has not been run under Wayland, Windows or macOS, and a complete real download
+  has not yet been started from the GUI.
 - Windows and macOS are compiled by CI but were not run locally; automatic updates install on
   Linux and macOS, while Windows users get the archive URL to install manually.
 - Automatic updates require write access to the directory containing the GUI executable.
