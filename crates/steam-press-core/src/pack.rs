@@ -998,6 +998,66 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn fresh_discards_a_stale_work_directory() {
+        let dir = temp_dir("pack-fresh");
+        let stale = dir.join("work/Balatro.Build.18674832.Linux64.public/stale.bin");
+        fs::create_dir_all(stale.parent().unwrap()).unwrap();
+        fs::write(&stale, b"stale").unwrap();
+
+        let mut options = PackOptions::for_tests(&dir);
+        options.fresh = true;
+        options.settings.steamcmd_path = Some(fake_steamcmd(&dir, 0));
+        options.settings.skip_compression = true;
+        options.settings.verify_archives = false;
+        let packer = Packer::with_preflight(options, Arc::new(fixture_preflight));
+        let outcome = packer.run(
+            &GameJob::new(Platform::Linux64, "2379780"),
+            EventSink::noop(),
+        );
+        assert!(
+            matches!(outcome.status, PackStatus::Completed),
+            "{:?}",
+            outcome.status
+        );
+        assert!(!stale.exists(), "--fresh kept a stale work file");
+    }
+
+    #[test]
+    fn resumes_from_a_downloaded_checkpoint_without_a_downloader() {
+        let dir = temp_dir("pack-resume");
+        let stem = "Balatro.Build.18674832.Linux64.public";
+        let work = dir.join("work").join(stem);
+        let steamapps = work.join("steamapps");
+        let common = steamapps.join("common/Balatro");
+        fs::create_dir_all(&common).unwrap();
+        fs::write(common.join("game.bin"), b"game").unwrap();
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/appmanifest_2379780.acf");
+        fs::copy(fixture, steamapps.join("appmanifest_2379780.acf")).unwrap();
+        write_checkpoint(&work, CheckpointStage::Downloaded, &steamapps).unwrap();
+
+        let mut options = PackOptions::for_tests(&dir);
+        options.settings.skip_compression = true;
+        options.settings.verify_archives = false;
+        let packer = Packer::with_preflight(options, Arc::new(fixture_preflight));
+        let outcome = packer.run(
+            &GameJob::new(Platform::Linux64, "2379780"),
+            EventSink::noop(),
+        );
+        assert!(
+            matches!(outcome.status, PackStatus::Completed),
+            "{:?}",
+            outcome.status
+        );
+        assert!(outcome
+            .output
+            .unwrap()
+            .join("steamapps/common/Balatro/game.bin")
+            .is_file());
+    }
+
+    #[cfg(unix)]
     fn fake_steamcmd(dir: &Path, exit_code: i32) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
 
