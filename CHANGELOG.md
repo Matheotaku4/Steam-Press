@@ -4,6 +4,21 @@ All notable changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [1.0.3] - 2026-11-15
+
+### Added
+
+- Exact offline snapshots for the `doctor`, `search`, `info`, `pack` and
+  `import` JSON documents. Their builders are now pure functions, so every
+  stable field is checked without network access or a Steam account.
+- Screenshots of the five GUI sections and the light theme in the user guide;
+  release archives now include `docs/screenshots/`.
+
+### Changed
+
+- `docs/json-schema.md` lists the five additional contract tests and the
+  offline guarantee they provide.
+
 ## [1.0.2] - 2026-11-14
 
 ### Added

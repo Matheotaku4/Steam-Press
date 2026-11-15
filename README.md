@@ -81,8 +81,8 @@ Linux archives are built on Ubuntu 22.04 (glibc 2.35) for broad compatibility:
 `.sha256` file, and `SHA256SUMS` covers every archive. To publish from a tag instead:
 
 ```bash
-git tag -a v1.0.2 -m "Steam Press 1.0.2"
-git push origin v1.0.2
+git tag -a v1.0.3 -m "Steam Press 1.0.3"
+git push origin v1.0.3
 ```
 
 The GUI checks the main `v*` releases on startup and from **Settings > Updates**. It downloads

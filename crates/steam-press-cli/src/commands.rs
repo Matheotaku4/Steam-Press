@@ -3,7 +3,7 @@ use crate::{
     Cli, Command, DepotsAction, DiffArgs, ImportArgs, InfoArgs, LoginArgs, PackArgs, QueueAction,
     SearchArgs, TemplateAction, WorkshopAction,
 };
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use steam_press_core::archive;
@@ -13,8 +13,8 @@ use steam_press_core::credentials::CredentialStore;
 use steam_press_core::depots::DepotNames;
 use steam_press_core::diff;
 use steam_press_core::downloader::{self, Downloader};
-use steam_press_core::import::{self, ImportOptions};
-use steam_press_core::pack::{PackOptions, PackStatus, Packer};
+use steam_press_core::import::{self, ImportOptions, ImportOutcome};
+use steam_press_core::pack::{PackOptions, PackOutcome, PackStatus, Packer};
 use steam_press_core::queue::{
     load_game_queue, load_workshop_queue, save_game_queue, save_workshop_queue, GameJob,
     WorkshopJob,
@@ -45,7 +45,7 @@ fn print_json(value: serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
-fn outcome_json(outcome: &steam_press_core::PackOutcome) -> serde_json::Value {
+fn outcome_json(outcome: &PackOutcome) -> serde_json::Value {
     let (status, error) = match &outcome.status {
         PackStatus::Completed => ("completed", None),
         PackStatus::Skipped => ("skipped", None),
@@ -66,6 +66,128 @@ fn outcome_json(outcome: &steam_press_core::PackOutcome) -> serde_json::Value {
             "size": depot.size_bytes,
             "sharedOwner": depot.shared_owner,
         })).collect::<Vec<_>>(),
+    })
+}
+
+fn tool_json(status: &downloader::ToolStatus) -> serde_json::Value {
+    serde_json::json!({
+        "available": status.available,
+        "path": status.path.as_ref().map(|path| path.display().to_string()),
+        "detail": status.detail,
+    })
+}
+
+fn tool_version_json(found: Option<&str>, minimum: &str) -> serde_json::Value {
+    let ok = found.map(|version| tooling::version_at_least(version, minimum));
+    serde_json::json!({
+        "found": found,
+        "minimum": minimum,
+        "ok": ok,
+    })
+}
+
+struct DoctorData<'a> {
+    config_dir: &'a Path,
+    work_dir: &'a Path,
+    output_dir: &'a Path,
+    archiver: &'a str,
+    steamcmd: &'a downloader::ToolStatus,
+    depotdownloader: &'a downloader::ToolStatus,
+    sevenzip: Option<&'a Path>,
+    rar: Option<&'a Path>,
+    sevenzip_version: Option<&'a str>,
+    rar_version: Option<&'a str>,
+    depotdownloader_version: Option<&'a str>,
+    known_depots: usize,
+    disk_free: Option<u64>,
+    credentials_present: bool,
+    credentials_readable: bool,
+    network: &'a Result<(), String>,
+}
+
+fn doctor_json(data: DoctorData<'_>) -> serde_json::Value {
+    serde_json::json!({
+        "ok": true,
+        "configDir": data.config_dir.display().to_string(),
+        "workDir": data.work_dir.display().to_string(),
+        "outputDir": data.output_dir.display().to_string(),
+        "outputWritable": true,
+        "archiver": data.archiver,
+        "steamcmd": tool_json(data.steamcmd),
+        "depotdownloader": tool_json(data.depotdownloader),
+        "sevenzip": data.sevenzip.map(|path| path.display().to_string()),
+        "rar": data.rar.map(|path| path.display().to_string()),
+        "knownDepots": data.known_depots,
+        "toolVersions": {
+            "sevenzip": tool_version_json(data.sevenzip_version, "21.0"),
+            "rar": tool_version_json(data.rar_version, "6.0"),
+            "depotdownloader": tool_version_json(data.depotdownloader_version, "3.0.0"),
+            "steamcmd": serde_json::json!({
+                "found": null,
+                "minimum": null,
+                "ok": null
+            }),
+        },
+        "diskFreeBytes": data.disk_free,
+        "credentials": {
+            "present": data.credentials_present,
+            "readable": data.credentials_readable,
+        },
+        "network": {
+            "reachable": data.network.is_ok(),
+            "detail": data.network.as_ref().err(),
+        },
+    })
+}
+
+fn search_json(results: &[steam::StoreSearchItem]) -> serde_json::Value {
+    let results: Vec<_> = results
+        .iter()
+        .map(|item| serde_json::json!({"appid": item.appid, "name": item.name}))
+        .collect();
+    serde_json::json!({"ok": true, "results": results})
+}
+
+fn info_json(app: &steam::AppInfo, store: Option<&steam::StoreInfo>) -> serde_json::Value {
+    serde_json::json!({
+        "appid": app.appid,
+        "name": app.name,
+        "installDir": app.install_dir,
+        "buildId": app.build_id,
+        "buildTime": app.build_time.map(template::format_utc_datetime),
+        "depots": app.depots.iter().map(|depot| serde_json::json!({
+            "depotId": depot.depot_id,
+            "name": depot.name,
+            "manifestId": depot.manifest_id,
+            "dlcAppid": depot.dlc_appid,
+            "size": depot.size_bytes,
+            "sharedOwner": depot.shared_owner,
+        })).collect::<Vec<_>>(),
+        "store": store.map(|store| serde_json::json!({
+            "name": store.name,
+            "shortDescription": store.short_description,
+            "website": store.website,
+        })),
+    })
+}
+
+fn pack_json(outcomes: &[PackOutcome]) -> serde_json::Value {
+    let jobs: Vec<_> = outcomes.iter().map(outcome_json).collect();
+    let ok = outcomes
+        .iter()
+        .all(|outcome| matches!(outcome.status, PackStatus::Completed | PackStatus::Skipped));
+    serde_json::json!({"ok": ok, "jobs": jobs})
+}
+
+fn import_json(outcome: &ImportOutcome) -> serde_json::Value {
+    serde_json::json!({
+        "ok": true,
+        "job": outcome.stem,
+        "status": match outcome.status { PackStatus::Skipped => "skipped", _ => "completed" },
+        "output": outcome.output.as_ref().map(|path| path.display().to_string()),
+        "manifest": outcome.manifest.as_ref().map(|path| path.display().to_string()),
+        "copiedBytes": outcome.copied_bytes,
+        "durationMs": outcome.duration.as_millis(),
     })
 }
 
@@ -117,14 +239,6 @@ fn doctor(cli: &Cli) -> Result<ExitCode, String> {
         .path
         .as_deref()
         .and_then(|path| tooling::probe_version(path, &["--version"]));
-    let version_info = |found: Option<&str>, minimum: &str| {
-        let ok = found.map(|version| tooling::version_at_least(version, minimum));
-        serde_json::json!({
-            "found": found,
-            "minimum": minimum,
-            "ok": ok,
-        })
-    };
     let disk_free = config::available_space(&output).ok();
     let store = CredentialStore::new(&paths);
     let credentials_present = store.exists();
@@ -133,47 +247,23 @@ fn doctor(cli: &Cli) -> Result<ExitCode, String> {
     let network = steam::check_network();
 
     if cli.json {
-        let tool = |status: downloader::ToolStatus| {
-            serde_json::json!({
-                "available": status.available,
-                "path": status.path.map(|path| path.display().to_string()),
-                "detail": status.detail,
-            })
-        };
-        print_json(serde_json::json!({
-            "ok": true,
-            "configDir": paths.config_dir.display().to_string(),
-            "workDir": paths.work_dir.display().to_string(),
-            "outputDir": output.display().to_string(),
-            "outputWritable": true,
-            "archiver": settings.compressor.label(),
-            "steamcmd": tool(steamcmd.clone()),
-            "depotdownloader": tool(depotdownloader.clone()),
-            "sevenzip": sevenzip.map(|path| path.display().to_string()),
-            "rar": rar.map(|path| path.display().to_string()),
-            "knownDepots": names.len(),
-            "toolVersions": {
-                "sevenzip": version_info(sevenzip_version.as_deref(), "21.0"),
-                "rar": version_info(rar_version.as_deref(), "6.0"),
-                "depotdownloader": version_info(
-                    depotdownloader_version.as_deref(),
-                    "3.0.0"
-                ),
-                "steamcmd": serde_json::json!({
-                    "found": null,
-                    "minimum": null,
-                    "ok": null
-                }),
-            },
-            "diskFreeBytes": disk_free,
-            "credentials": {
-                "present": credentials_present,
-                "readable": credentials_readable,
-            },
-            "network": {
-                "reachable": network.is_ok(),
-                "detail": network.err(),
-            },
+        print_json(doctor_json(DoctorData {
+            config_dir: &paths.config_dir,
+            work_dir: &paths.work_dir,
+            output_dir: &output,
+            archiver: settings.compressor.label(),
+            steamcmd: &steamcmd,
+            depotdownloader: &depotdownloader,
+            sevenzip: sevenzip.as_deref(),
+            rar: rar.as_deref(),
+            sevenzip_version: sevenzip_version.as_deref(),
+            rar_version: rar_version.as_deref(),
+            depotdownloader_version: depotdownloader_version.as_deref(),
+            known_depots: names.len(),
+            disk_free,
+            credentials_present,
+            credentials_readable,
+            network: &network,
         }))?;
         return Ok(ExitCode::SUCCESS);
     }
@@ -295,27 +385,7 @@ fn info(cli: &Cli, args: &InfoArgs) -> Result<ExitCode, String> {
     let app = steam::fetch_app_info(&args.appid, &args.branch)?;
     if cli.json {
         let store = steam::fetch_store_info(&args.appid).ok();
-        let payload = serde_json::json!({
-            "appid": app.appid,
-            "name": app.name,
-            "installDir": app.install_dir,
-            "buildId": app.build_id,
-            "buildTime": app.build_time.map(template::format_utc_datetime),
-            "depots": app.depots.iter().map(|depot| serde_json::json!({
-                "depotId": depot.depot_id,
-                "name": depot.name,
-                "manifestId": depot.manifest_id,
-                "dlcAppid": depot.dlc_appid,
-                "size": depot.size_bytes,
-                "sharedOwner": depot.shared_owner,
-            })).collect::<Vec<_>>(),
-            "store": store.map(|store| serde_json::json!({
-                "name": store.name,
-                "shortDescription": store.short_description,
-                "website": store.website,
-            })),
-        });
-        print_json(payload)?;
+        print_json(info_json(&app, store.as_ref()))?;
         return Ok(ExitCode::SUCCESS);
     }
     println!("{} ({})", app.name, app.appid);
@@ -359,11 +429,7 @@ fn search(cli: &Cli, args: &SearchArgs) -> Result<ExitCode, String> {
     }
     let results = steam::search_store(term)?;
     if cli.json {
-        let payload: Vec<_> = results
-            .iter()
-            .map(|item| serde_json::json!({"appid": item.appid, "name": item.name}))
-            .collect();
-        print_json(serde_json::json!({"ok": true, "results": payload}))?;
+        print_json(search_json(&results))?;
         return Ok(ExitCode::SUCCESS);
     }
     if results.is_empty() {
@@ -597,12 +663,11 @@ fn pack(cli: &Cli, args: &PackArgs) -> Result<ExitCode, String> {
         support::event_sink(cli.verbose)
     };
     let mut failed = 0;
-    let mut results = Vec::new();
+    let mut outcomes = Vec::new();
 
     for job in &jobs {
         let packer = Packer::new(options.clone());
         let outcome = packer.run(job, sink.clone());
-        results.push(outcome_json(&outcome));
         match &outcome.status {
             PackStatus::Completed | PackStatus::Skipped => {
                 if !cli.json {
@@ -634,10 +699,11 @@ fn pack(cli: &Cli, args: &PackArgs) -> Result<ExitCode, String> {
                 }
             }
         }
+        outcomes.push(outcome);
     }
 
     if cli.json {
-        print_json(serde_json::json!({"ok": failed == 0, "jobs": results}))?;
+        print_json(pack_json(&outcomes))?;
     }
 
     Ok(if failed > 0 {
@@ -673,15 +739,7 @@ fn import(cli: &Cli, args: &ImportArgs) -> Result<ExitCode, String> {
     };
     let outcome = import::import_local(&options, sink).map_err(|error| error.to_string())?;
     if cli.json {
-        print_json(serde_json::json!({
-            "ok": true,
-            "job": outcome.stem,
-            "status": match outcome.status { PackStatus::Skipped => "skipped", _ => "completed" },
-            "output": outcome.output.as_ref().map(|path| path.display().to_string()),
-            "manifest": outcome.manifest.as_ref().map(|path| path.display().to_string()),
-            "copiedBytes": outcome.copied_bytes,
-            "durationMs": outcome.duration.as_millis(),
-        }))?;
+        print_json(import_json(&outcome))?;
     } else {
         println!(
             "{} — {:?} en {:.1}s",
@@ -1032,5 +1090,234 @@ mod tests {
         assert_eq!(version_hint("21.0", "21.0"), "(minimum 21.0)");
         assert_eq!(version_hint("23.01", "21.0"), "(minimum 21.0)");
         assert!(version_hint("16.02", "21.0").contains("older than 21.0"));
+    }
+
+    fn tool(path: Option<&str>, detail: &str) -> downloader::ToolStatus {
+        downloader::ToolStatus {
+            available: path.is_some(),
+            path: path.map(PathBuf::from),
+            detail: detail.to_string(),
+        }
+    }
+
+    fn depot() -> steam::DepotEntry {
+        steam::DepotEntry {
+            depot_id: "2379781".into(),
+            name: "Balatro".into(),
+            manifest_id: "4851806656204679952".into(),
+            dlc_appid: None,
+            size_bytes: Some(1024),
+            shared_owner: None,
+        }
+    }
+
+    #[test]
+    fn doctor_json_snapshot() {
+        let steamcmd = tool(Some("/opt/steamcmd"), "found");
+        let depotdownloader = tool(None, "not found");
+        let network = Ok(());
+        let document = json_document(doctor_json(DoctorData {
+            config_dir: Path::new("/tmp/sp/config"),
+            work_dir: Path::new("/tmp/sp/work"),
+            output_dir: Path::new("/tmp/sp/out"),
+            archiver: "7-Zip",
+            steamcmd: &steamcmd,
+            depotdownloader: &depotdownloader,
+            sevenzip: Some(Path::new("/usr/bin/7z")),
+            rar: None,
+            sevenzip_version: Some("16.02"),
+            rar_version: None,
+            depotdownloader_version: None,
+            known_depots: 7,
+            disk_free: Some(123_456_789),
+            credentials_present: false,
+            credentials_readable: false,
+            network: &network,
+        }));
+        assert_eq!(
+            document,
+            serde_json::json!({
+                "schemaVersion": 1,
+                "ok": true,
+                "configDir": "/tmp/sp/config",
+                "workDir": "/tmp/sp/work",
+                "outputDir": "/tmp/sp/out",
+                "outputWritable": true,
+                "archiver": "7-Zip",
+                "steamcmd": {"available": true, "path": "/opt/steamcmd", "detail": "found"},
+                "depotdownloader": {"available": false, "path": null, "detail": "not found"},
+                "sevenzip": "/usr/bin/7z",
+                "rar": null,
+                "knownDepots": 7,
+                "toolVersions": {
+                    "sevenzip": {"found": "16.02", "minimum": "21.0", "ok": false},
+                    "rar": {"found": null, "minimum": "6.0", "ok": null},
+                    "depotdownloader": {"found": null, "minimum": "3.0.0", "ok": null},
+                    "steamcmd": {"found": null, "minimum": null, "ok": null}
+                },
+                "diskFreeBytes": 123456789,
+                "credentials": {"present": false, "readable": false},
+                "network": {"reachable": true, "detail": null}
+            })
+        );
+    }
+
+    #[test]
+    fn search_and_info_json_snapshots() {
+        let results = vec![
+            steam::StoreSearchItem {
+                appid: "480".into(),
+                name: "Spacewar".into(),
+            },
+            steam::StoreSearchItem {
+                appid: "2379780".into(),
+                name: "Balatro".into(),
+            },
+        ];
+        assert_eq!(
+            json_document(search_json(&results)),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "ok": true,
+                "results": [
+                    {"appid": "480", "name": "Spacewar"},
+                    {"appid": "2379780", "name": "Balatro"}
+                ]
+            })
+        );
+
+        let app = steam::AppInfo {
+            appid: "2379780".into(),
+            name: "Balatro".into(),
+            install_dir: Some("Balatro".into()),
+            build_id: "18674832".into(),
+            build_time: None,
+            depots: vec![depot()],
+        };
+        let store = steam::StoreInfo {
+            name: "Balatro".into(),
+            short_description: "Poker roguelike".into(),
+            website: Some("https://example.com".into()),
+        };
+        assert_eq!(
+            json_document(info_json(&app, Some(&store))),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "appid": "2379780",
+                "name": "Balatro",
+                "installDir": "Balatro",
+                "buildId": "18674832",
+                "buildTime": null,
+                "depots": [{
+                    "depotId": "2379781",
+                    "name": "Balatro",
+                    "manifestId": "4851806656204679952",
+                    "dlcAppid": null,
+                    "size": 1024,
+                    "sharedOwner": null
+                }],
+                "store": {
+                    "name": "Balatro",
+                    "shortDescription": "Poker roguelike",
+                    "website": "https://example.com"
+                }
+            })
+        );
+    }
+
+    fn pack_outcome(
+        status: PackStatus,
+        stem: &str,
+        output: Option<&str>,
+        duration_ms: u64,
+    ) -> PackOutcome {
+        PackOutcome {
+            status,
+            stem: stem.into(),
+            output: output.map(PathBuf::from),
+            info_files: output
+                .map(|_| vec![PathBuf::from("/out/Balatro.info.txt")])
+                .unwrap_or_default(),
+            build_id: "18674832".into(),
+            build_time: None,
+            depots: vec![depot()],
+            duration: std::time::Duration::from_millis(duration_ms),
+        }
+    }
+
+    #[test]
+    fn pack_and_import_json_snapshots() {
+        let completed = pack_outcome(
+            PackStatus::Completed,
+            "Balatro.Build.18674832.Linux64.public",
+            Some("/out/Balatro.7z"),
+            1500,
+        );
+        let failed = pack_outcome(
+            PackStatus::Failed("network error".into()),
+            "Broken.Build.1.Linux64.public",
+            None,
+            10,
+        );
+        assert_eq!(
+            json_document(pack_json(&[completed, failed])),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "ok": false,
+                "jobs": [{
+                    "job": "Balatro.Build.18674832.Linux64.public",
+                    "status": "completed",
+                    "error": null,
+                    "output": "/out/Balatro.7z",
+                    "infoFiles": ["/out/Balatro.info.txt"],
+                    "buildId": "18674832",
+                    "durationMs": 1500,
+                    "depots": [{
+                        "depotId": "2379781",
+                        "manifestId": "4851806656204679952",
+                        "size": 1024,
+                        "sharedOwner": null
+                    }]
+                }, {
+                    "job": "Broken.Build.1.Linux64.public",
+                    "status": "failed",
+                    "error": "network error",
+                    "output": null,
+                    "infoFiles": [],
+                    "buildId": "18674832",
+                    "durationMs": 10,
+                    "depots": [{
+                        "depotId": "2379781",
+                        "manifestId": "4851806656204679952",
+                        "size": 1024,
+                        "sharedOwner": null
+                    }]
+                }]
+            })
+        );
+
+        let outcome = ImportOutcome {
+            status: PackStatus::Completed,
+            stem: "Balatro.Build.18674832.Linux64.public".into(),
+            output: Some(PathBuf::from("/out/Balatro.7z")),
+            manifest: Some(PathBuf::from(
+                "/out/Balatro.7z/steamapps/appmanifest_2379780.acf",
+            )),
+            copied_bytes: 4096,
+            duration: std::time::Duration::from_millis(250),
+        };
+        assert_eq!(
+            json_document(import_json(&outcome)),
+            serde_json::json!({
+                "schemaVersion": 1,
+                "ok": true,
+                "job": "Balatro.Build.18674832.Linux64.public",
+                "status": "completed",
+                "output": "/out/Balatro.7z",
+                "manifest": "/out/Balatro.7z/steamapps/appmanifest_2379780.acf",
+                "copiedBytes": 4096,
+                "durationMs": 250
+            })
+        );
     }
 }

@@ -242,3 +242,37 @@ d'un job terminé, de consulter son journal et de le relancer.
 Le modèle de menace complet et les limites du coffre sont décrits dans
 [security-review.md](security-review.md). La sortie `--json` et sa version de schéma sont
 décrites dans [json-schema.md](json-schema.md).
+
+## 13. Aperçu de la GUI
+
+La GUI reprend les mêmes réglages et files que le CLI. Les captures ci-dessous ont été
+prises avec la version 1.0.2 sous Linux/X11 ; elles servent de référence visuelle, pas de
+promesse de rendu identique sur chaque plateforme.
+
+### Library
+
+![Library — file de jeux](screenshots/library.png)
+
+### Workshop
+
+![Workshop — objets de communauté](screenshots/workshop.png)
+
+### History
+
+![History — jobs terminés](screenshots/history.png)
+
+### Depots
+
+![Depots — noms des dépôts](screenshots/depots.png)
+
+### Settings
+
+![Settings — moteur et chemins](screenshots/settings.png)
+
+### Thème clair
+
+![Settings en thème clair](screenshots/light-theme.png)
+
+La file et l'historique sont enregistrés dans le dossier de configuration ; ils sont
+restaurés au lancement suivant. Le bouton de thème bascule entre clair et sombre
+immédiatement ; pour conserver le choix, utilisez **Save settings**.

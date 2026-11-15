@@ -91,6 +91,7 @@ jobs:
           cp docs/usage.md docs/migration-1.0.md docs/security-review.md \
             docs/exit-codes.md docs/json-schema.md docs/real-test-1.0.1.md \
             "dist/${combined}/docs/"
+          cp -R docs/screenshots "dist/${combined}/docs/"
           tar -C dist -czf "dist/${combined}.tar.gz" "${combined}"
 
           cli="steam-press-cli-${version}-${platform}"
@@ -100,6 +101,7 @@ jobs:
           cp docs/usage.md docs/migration-1.0.md docs/security-review.md \
             docs/exit-codes.md docs/json-schema.md docs/real-test-1.0.1.md \
             "dist/${cli}/docs/"
+          cp -R docs/screenshots "dist/${cli}/docs/"
           tar -C dist -czf "dist/${cli}.tar.gz" "${cli}"
 
           gui="steam-press-gui-${version}-${platform}"
@@ -109,6 +111,7 @@ jobs:
           cp docs/usage.md docs/migration-1.0.md docs/security-review.md \
             docs/exit-codes.md docs/json-schema.md docs/real-test-1.0.1.md \
             "dist/${gui}/docs/"
+          cp -R docs/screenshots "dist/${gui}/docs/"
           tar -C dist -czf "dist/${gui}.tar.gz" "${gui}"
 
           checksum() {

@@ -51,8 +51,12 @@ compatibles et ne changent pas la version.
 
 `crates/steam-press-cli/tests/json_snapshots.rs` compare la sortie complète de
 `queue list`, `workshop list`, `depots list`, `login`, `template render` et
-`diff` à des valeurs de référence. Le test vérifie aussi qu'une sortie `--json`
-ne contient rien d'autre que l'objet JSON (notamment pour une file vide) et
-qu'une erreur produit `ok: false`, `error` et `schemaVersion`. Ces tests
-s'exécutent hors ligne ; toute modification d'un champ stable fait échouer la
-CI et impose une décision explicite sur `schemaVersion`.
+`diff` à des valeurs de référence. Il vérifie aussi qu'une sortie `--json` ne
+contient rien d'autre que l'objet JSON (notamment pour une file vide) et qu'une
+erreur produit `ok: false`, `error` et `schemaVersion`.
+
+Les documents qui dépendent de Steam passent par des constructeurs purs testés
+dans `commands.rs` : `doctor`, `search`, `info`, `pack` et `import` ont chacun
+un snapshot exact avec des objets représentatifs. Ces tests s'exécutent hors
+ligne ; toute modification d'un champ stable fait échouer la CI et impose une
+décision explicite sur `schemaVersion`.
