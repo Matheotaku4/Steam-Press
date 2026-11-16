@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Steam Press — Packing tool for Steam games, written in Rust</title>
+<meta name="description" content="Steam Press downloads Steam depots, builds clean app manifests, compresses the result and generates cs.rin.ru release notes. CLI + desktop app, written in Rust.">
+<meta name="theme-color" content="#0b1118">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♨️</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#f6f8fb;--surface:#fff;--surface2:#eef2f7;--text:#0f1722;--muted:#556275;--line:#dbe2ec;--accent:#1b8fd6;--accent2:#6a5cff;--term:#0b1118;--term-text:#d6e2f0;--glow:rgba(27,143,214,.18);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b1118;--surface:#121b26;--surface2:#172230;--text:#e8eef6;--muted:#8fa1b6;--line:#202e3f;--accent:#66c0f4;--accent2:#8b7bff;--term:#070b10;--term-text:#d6e2f0;--glow:rgba(102,192,244,.16);color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0b1118;--surface:#121b26;--surface2:#172230;--text:#e8eef6;--muted:#8fa1b6;--line:#202e3f;--accent:#66c0f4;--accent2:#8b7bff;--term:#070b10;--term-text:#d6e2f0;--glow:rgba(102,192,244,.16);color-scheme:dark}
+*{box-sizing:border-box;margin:0}
+html{scroll-behavior:smooth;scroll-padding-top:80px}
+body{background:var(--bg);color:var(--text);font:16px/1.65 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;padding-top:env(safe-area-inset-top,0px)}
+a{color:inherit;text-decoration:none}
+code,pre{font-family:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+/* nav */
+nav{position:sticky;top:0;z-index:20;backdrop-filter:blur(14px);background:color-mix(in srgb,var(--bg) 78%,transparent);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;gap:24px;height:64px}
+.logo{display:flex;align-items:center;gap:10px;font-weight:800;letter-spacing:-.02em;font-size:18px}
+.logo i{width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,var(--accent),var(--accent2));display:grid;place-items:center;color:#fff;font-style:normal;font-size:16px}
+.links{display:flex;gap:22px;margin-left:auto;font-size:14px;font-weight:500;color:var(--muted)}
+.links a:hover{color:var(--text)}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:11px 20px;border-radius:12px;font-weight:600;font-size:15px;border:1px solid var(--line);background:var(--surface);transition:.2s;cursor:pointer;color:var(--text)}
+.btn:hover{transform:translateY(-2px);border-color:var(--accent)}
+.btn.primary{background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border:0;box-shadow:0 10px 30px -10px var(--accent)}
+.icon-btn{width:38px;height:38px;padding:0;justify-content:center;border-radius:10px}
+/* hero */
+.hero{position:relative;overflow:hidden;padding:96px 0 72px;text-align:center}
+.hero::before{content:"";position:absolute;inset:-20% -10% auto;height:560px;background:radial-gradient(ellipse at 30% 20%,var(--glow),transparent 60%),radial-gradient(ellipse at 75% 10%,color-mix(in srgb,var(--accent2) 22%,transparent),transparent 55%);z-index:-1}
+.badge{display:inline-flex;gap:8px;align-items:center;padding:6px 14px;border:1px solid var(--line);border-radius:99px;background:var(--surface);font-size:13px;color:var(--muted);font-weight:500}
+.badge b{color:var(--accent)}
+h1{font-size:clamp(40px,7vw,76px);line-height:1.04;letter-spacing:-.045em;font-weight:800;margin:24px auto 20px;max-width:900px}
+.grad{background:linear-gradient(120deg,var(--accent),var(--accent2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{font-size:clamp(17px,2.2vw,20px);color:var(--muted);max-width:680px;margin:0 auto 32px}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.pills{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:28px}
+.pills span{font:500 12px "JetBrains Mono",monospace;color:var(--muted);padding:4px 10px;border-radius:8px;background:var(--surface2)}
+/* terminal */
+.term{max-width:820px;margin:56px auto 0;text-align:left;border-radius:16px;background:var(--term);border:1px solid var(--line);box-shadow:0 40px 80px -30px rgba(0,0,0,.45);overflow:hidden}
+.term-bar{display:flex;gap:7px;align-items:center;padding:13px 16px;border-bottom:1px solid #1a2634}
+.term-bar i{width:11px;height:11px;border-radius:50%;background:#ff5f57}.term-bar i:nth-child(2){background:#febc2e}.term-bar i:nth-child(3){background:#28c840}
+.term-bar span{margin-left:10px;font:12px "JetBrains Mono",monospace;color:#6c7f95}
+.term pre{padding:20px 22px;font-size:13.5px;line-height:1.8;color:var(--term-text);overflow-x:auto}
+.c{color:#5d7289}.p{color:#66c0f4}.ok{color:#4ade80}.w{color:#fbbf24}
+/* sections */
+section{padding:84px 0}
+.eyebrow{font:600 13px "JetBrains Mono",monospace;color:var(--accent);text-transform:uppercase;letter-spacing:.1em}
+h2{font-size:clamp(30px,4.4vw,46px);letter-spacing:-.035em;line-height:1.1;margin:10px 0 14px;font-weight:800}
+.sub{color:var(--muted);max-width:640px;font-size:17px}
+.grid{display:grid;gap:18px;margin-top:44px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:26px;transition:.25s;position:relative}
+.card:hover{transform:translateY(-4px);border-color:color-mix(in srgb,var(--accent) 55%,var(--line));box-shadow:0 20px 50px -25px var(--accent)}
+.card svg{width:40px;height:40px;padding:9px;border-radius:12px;background:var(--surface2);color:var(--accent);stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;margin-bottom:16px}
+.card h3{font-size:18px;letter-spacing:-.01em;margin-bottom:6px}
+.card p{color:var(--muted);font-size:15px}
+.card code{font-size:12.5px;background:var(--surface2);padding:2px 6px;border-radius:6px}
+/* steps */
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0;margin-top:44px;counter-reset:s}
+.step{padding:26px 24px;border:1px solid var(--line);background:var(--surface);counter-increment:s;position:relative}
+.step:first-child{border-radius:18px 0 0 18px}.step:last-child{border-radius:0 18px 18px 0}
+.step::before{content:"0" counter(s);font:700 13px "JetBrains Mono",monospace;color:var(--accent)}
+.step h3{margin:6px 0 4px;font-size:18px}.step p{color:var(--muted);font-size:14.5px}
+@media(max-width:760px){.step,.step:first-child,.step:last-child{border-radius:0;margin-top:-1px}.step:first-child{border-radius:18px 18px 0 0}.step:last-child{border-radius:0 0 18px 18px}.links{display:none}nav .wrap{justify-content:space-between}}
+/* tabs / code */
+.two{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:44px}
+@media(max-width:860px){.two{grid-template-columns:1fr}}
+.code{background:var(--term);border:1px solid var(--line);border-radius:16px;overflow:hidden;position:relative}
+.code h4{font:500 12px "JetBrains Mono",monospace;color:#6c7f95;padding:12px 18px;border-bottom:1px solid #1a2634}
+.code pre{padding:18px;font-size:13px;line-height:1.75;color:var(--term-text);overflow-x:auto}
+.copy{position:absolute;top:8px;right:10px;background:#1a2634;color:#9fb3c8;border:0;border-radius:8px;font:500 11px Inter,sans-serif;padding:5px 10px;cursor:pointer}
+.copy:hover{color:#fff}
+.arch{display:grid;gap:12px;margin-top:44px;grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.arch .card code.n{display:block;background:none;padding:0;font-size:14px;color:var(--accent);margin-bottom:8px;font-weight:500}
+/* downloads */
+.dl{margin-top:44px;border-radius:24px;padding:48px;background:linear-gradient(135deg,color-mix(in srgb,var(--accent) 16%,var(--surface)),color-mix(in srgb,var(--accent2) 16%,var(--surface)));border:1px solid var(--line);text-align:center}
+.dl .cta{margin-top:24px}
+.plats{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:22px;font-size:13px;color:var(--muted)}
+.plats span{padding:5px 12px;border:1px solid var(--line);border-radius:99px;background:var(--surface)}
+.docs{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:40px}
+.docs a{padding:16px 20px;border:1px solid var(--line);border-radius:14px;background:var(--surface);font-weight:600;font-size:15px;display:flex;justify-content:space-between;transition:.2s}
+.docs a:hover{border-color:var(--accent);transform:translateX(4px)}.docs a span{color:var(--accent)}
+.note{margin-top:28px;font-size:14px;color:var(--muted);border-left:3px solid var(--accent);padding:4px 0 4px 16px;max-width:760px}
+footer{border-top:1px solid var(--line);padding:36px 0;color:var(--muted);font-size:14px}
+footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px}
+footer a:hover{color:var(--text)}
+.reveal{opacity:0;transform:translateY(18px);transition:.7s cubic-bezier(.2,.7,.2,1)}.reveal.in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){.reveal{opacity:1;transform:none;transition:none}html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<nav><div class="wrap">
+  <a class="logo" href="#"><i>♨</i>Steam Press</a>
+  <div class="links"><a href="#features">Features</a><a href="#how">How it works</a><a href="#cli">CLI</a><a href="#download">Download</a><a href="#docs">Docs</a></div>
+  <div style="display:flex;gap:8px">
+    <button class="btn icon-btn" id="theme" aria-label="Toggle theme">◐</button>
+    <a class="btn" href="https://github.com/Matheotaku4/Steam-Press">GitHub ↗</a>
+  </div>
+</div></nav>
+
+<header class="hero"><div class="wrap">
+  <span class="badge"><b>●</b> Open source · MIT · Rust 1.88+</span>
+  <h1>Pack Steam games <span class="grad">cleanly, fast, reliably.</span></h1>
+  <p class="lead">Steam Press downloads Steam depots, produces clean app manifests, compresses the result and generates cs.rin.ru release notes — from a CLI or a native desktop app.</p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/Matheotaku4/Steam-Press/releases">Download latest release</a>
+    <a class="btn" href="https://github.com/Matheotaku4/Steam-Press">View source</a>
+  </div>
+  <div class="pills"><span>SteamCMD</span><span>DepotDownloader</span><span>7-Zip · RAR</span><span>AES-256-GCM vault</span><span>--json</span></div>
+
+  <div class="term reveal"><div class="term-bar"><i></i><i></i><i></i><span>steam-press — bash</span></div>
+<pre><span class="c"># find a game, then pack it</span>
+<span class="p">$</span> steam-press search "half-life"
+<span class="p">$</span> steam-press pack --appid 2379780 --os lin64 --dry-run
+<span class="ok">✓</span> disk space preflight       <span class="c">ok · 182 GB free</span>
+<span class="ok">✓</span> depots downloaded          <span class="c">steamcmd</span>
+<span class="ok">✓</span> appmanifest_2379780.acf    <span class="c">sanitized</span>
+<span class="ok">✓</span> 7z volumes (5 GB)          <span class="c">verified</span>
+<span class="ok">✓</span> SHA256SUMS + release notes <span class="c">[CS.RIN.RU Info]</span></pre></div>
+</div></header>
+
+<section id="features"><div class="wrap">
+  <div class="eyebrow">Features</div>
+  <h2 class="reveal">Everything the packing workflow needs.</h2>
+  <p class="sub">A Rust reimplementation of the SuperSteamPacker workflow, with the reliability ideas of OmniPacker.</p>
+  <div class="grid">
+    <div class="card reveal"><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 19h16"/></svg><h3>Two download engines</h3><p>SteamCMD by default or DepotDownloader, behind one abstraction. Queue games with platform, branch and protected branches, plus Workshop items.</p></div>
+    <div class="card reveal"><svg viewBox="0 0 24 24"><path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M4 7l8 4 8-4M12 11v10"/></svg><h3>Clean manifests</h3><p>Reads <code>.acf</code>, sanitizes <code>LastOwner</code> and <code>LauncherPath</code>, and generates full manifests — including the redistributables one.</p></div>
+    <div class="card reveal"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/><path d="M7 7h.01M7 17h.01"/></svg><h3>7-Zip &amp; RAR archives</h3><p>5 GB volumes, encrypted headers and the cs.rin.ru password by default, or your own options. Archives are verified, with sha256sum-compatible manifests.</p></div>
+    <div class="card reveal"><svg viewBox="0 0 24 24"><path d="M8 4h8l4 4v12H4V4z"/><path d="M8 12h8M8 16h5"/></svg><h3>Release notes</h3><p>Built-in <code>[CS.RIN.RU Info]</code> and <code>[Upload Crew Info]</code> templates, or write your own with tokens and a per-depot loop.</p></div>
+    <div class="card reveal"><svg viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/></svg><h3>Secure by design</h3><p>Credentials in an AES-256-GCM encrypted vault (<code>0600</code>), never logged and never passed on a command line.</p></div>
+    <div class="card reveal"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1015-6.7L21 8M21 3v5h-5"/></svg><h3>Resumable &amp; safe</h3><p>Disk-space preflight, checkpointed work directories, <code>--fresh</code> restarts, and cancellation that keeps partial archives.</p></div>
+    <div class="card reveal"><svg viewBox="0 0 24 24"><path d="M7 7h10M7 17h10M4 12h16"/><path d="M4 4l3 3-3 3M20 14l-3 3 3 3"/></svg><h3>Import &amp; diff</h3><p>Import a local install or compare two builds to produce an update archive, with a <code>deleted_files.txt</code> manifest.</p></div>
+    <div class="card reveal"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg><h3>Native desktop app</h3><p>An egui GUI with Library, Workshop, History, Depots and Settings. Light/dark themes, Lucide icons, auto-saved queues and in-app updates.</p></div>
+    <div class="card reveal"><svg viewBox="0 0 24 24"><path d="M8 6L3 12l5 6M16 6l5 6-5 6"/></svg><h3>Scriptable</h3><p>Global <code>--json</code> output for doctor, search, info, queue, pack, diff and more. SuperSteamPacker-compatible <code>.SSPQ</code> / <code>.SSWQ</code> queues.</p></div>
+  </div>
+</div></section>
+
+<section id="how" style="padding-top:0"><div class="wrap">
+  <div class="eyebrow">Pipeline</div>
+  <h2 class="reveal">From App ID to release, in four steps.</h2>
+  <div class="steps reveal">
+    <div class="step"><h3>Download</h3><p>Depots and shared redistributables via SteamCMD or DepotDownloader.</p></div>
+    <div class="step"><h3>Sanitize</h3><p>Privacy-clean <code>.acf</code> files and complete app manifests.</p></div>
+    <div class="step"><h3>Compress</h3><p>7z or RAR volumes, verified, with SHA-256 checksums.</p></div>
+    <div class="step"><h3>Publish</h3><p>Ready-to-paste cs.rin.ru notes from a template.</p></div>
+  </div>
+</div></section>
+
+<section id="cli" style="padding-top:0"><div class="wrap">
+  <div class="eyebrow">Quick start</div>
+  <h2 class="reveal">Up and running in a minute.</h2>
+  <div class="two">
+    <div class="code reveal"><h4>build</h4><button class="copy">Copy</button>
+<pre>cargo build --release \
+  -p steam-press-cli \
+  -p steam-press-gui
+
+<span class="c"># desktop app</span>
+cargo run -p steam-press-gui
+
+<span class="c"># check your setup</span>
+steam-press doctor</pre></div>
+    <div class="code reveal"><h4>usage</h4><button class="copy">Copy</button>
+<pre>steam-press login
+steam-press depots sync
+steam-press queue add 2379780 --os lin64
+steam-press pack --queue queue.sspq --compressor 7z
+steam-press import /games/MyGame --appid 2379780
+steam-press diff ./build-a ./build-b --archive</pre></div>
+  </div>
+  <p class="note">Requires Rust 1.88+, <code>steamcmd</code> and <code>7z</code> in your <code>PATH</code>. A <code>rar</code> binary and DepotDownloader are optional.</p>
+
+  <div class="arch">
+    <div class="card reveal"><code class="n">steam-press-core</code><p>Business rules, no GUI dependency.</p></div>
+    <div class="card reveal"><code class="n">steam-press-cli</code><p>The <code>steam-press</code> command-line interface.</p></div>
+    <div class="card reveal"><code class="n">steam-press-gui</code><p>The egui desktop application.</p></div>
+  </div>
+</div></section>
+
+<section id="download" style="padding-top:0"><div class="wrap">
+  <div class="dl reveal">
+    <div class="eyebrow">Download</div>
+    <h2>One release, every platform.</h2>
+    <p class="sub" style="margin:0 auto">GitHub Actions builds full, CLI-only and GUI-only archives with SHA-256 checksums. The GUI updates itself on Linux and macOS.</p>
+    <div class="plats"><span>Linux x86_64</span><span>macOS Intel</span><span>macOS Apple Silicon</span><span>Windows x86_64</span></div>
+    <div class="cta"><a class="btn primary" href="https://github.com/Matheotaku4/Steam-Press/releases">Get Steam Press</a><a class="btn" href="https://github.com/Matheotaku4/Steam-Press/blob/main/CHANGELOG.md">Changelog</a></div>
+  </div>
+</div></section>
+
+<section id="docs" style="padding-top:0"><div class="wrap">
+  <div class="eyebrow">Documentation</div>
+  <h2 class="reveal">Read the docs.</h2>
+  <div class="docs">
+    <a href="https://github.com/Matheotaku4/Steam-Press/blob/main/docs/usage.md">Usage guide <span>→</span></a>
+    <a href="https://github.com/Matheotaku4/Steam-Press/blob/main/docs/migration-1.0.md">Migration 0.x → 1.0 <span>→</span></a>
+    <a href="https://github.com/Matheotaku4/Steam-Press/blob/main/docs/json-schema.md">JSON schema <span>→</span></a>
+    <a href="https://github.com/Matheotaku4/Steam-Press/blob/main/docs/exit-codes.md">Exit codes <span>→</span></a>
+    <a href="https://github.com/Matheotaku4/Steam-Press/blob/main/docs/security-review.md">Security review <span>→</span></a>
+    <a href="https://github.com/Matheotaku4/Steam-Press/blob/main/CONTRIBUTING.md">Contributing <span>→</span></a>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  <span>© Steam Press · MIT license · Independent project, not affiliated with Valve or Steam.</span>
+  <span><a href="https://github.com/Matheotaku4/Steam-Press">GitHub</a> · <a href="https://github.com/Masquerade64/SuperSteamPacker">SuperSteamPacker</a> · <a href="https://github.com/elgreams/OmniPacker">OmniPacker</a></span>
+</div></footer>
+
+<script>
+(function(){
+  var r=document.documentElement,b=document.getElementById("theme");
+  try{var t=localStorage.getItem("sp-theme");if(t)r.dataset.theme=t}catch(e){}
+  b.onclick=function(){
+    var dark=r.dataset.theme?r.dataset.theme==="dark":matchMedia("(prefers-color-scheme:dark)").matches;
+    r.dataset.theme=dark?"light":"dark";
+    try{localStorage.setItem("sp-theme",r.dataset.theme)}catch(e){}
+  };
+  document.querySelectorAll(".copy").forEach(function(c){c.onclick=function(){
+    var t=c.parentNode.querySelector("pre").innerText;
+    (navigator.clipboard?navigator.clipboard.writeText(t):Promise.reject()).then(function(){c.textContent="Copied ✓";setTimeout(function(){c.textContent="Copy"},1500)}).catch(function(){})
+  }});
+  var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add("in");io.unobserve(e.target)}})},{threshold:.12});
+  document.querySelectorAll(".reveal").forEach(function(el){io.observe(el)});
+})();
+</script>
+</body>
+</html>
