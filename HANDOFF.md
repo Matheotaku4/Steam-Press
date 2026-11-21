@@ -1,6 +1,6 @@
 # Handoff — Steam Press 1.0.3
 
-État au **2026-11-15**. Le lot fonctionnel est le commit `9927171` ; le présent document
+État au **2026-11-21**. Le lot fonctionnel est le commit `9927171` ; le présent document
 est ajouté dans le commit de passation qui suit, sur la branche
 `feat/1.0.3-json-contracts`.
 
