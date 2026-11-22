@@ -201,6 +201,9 @@ pub struct PackArgs {
     pub fresh: bool,
     #[arg(long)]
     pub anonymous: bool,
+    /// Steam Guard code from the email or the authenticator app.
+    #[arg(long)]
+    pub steam_guard_code: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -275,6 +278,9 @@ pub enum WorkshopAction {
         no_compress: bool,
         #[arg(long)]
         anonymous: bool,
+        /// Steam Guard code from the email or the authenticator app.
+        #[arg(long)]
+        steam_guard_code: Option<String>,
     },
 }
 

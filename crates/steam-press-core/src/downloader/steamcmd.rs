@@ -39,15 +39,31 @@ impl SteamCmd {
         )
     }
 
-    fn login_line(credentials: &super::Credentials) -> String {
+    fn login_lines(
+        credentials: &super::Credentials,
+        steam_guard_code: Option<&str>,
+    ) -> Vec<String> {
         if credentials.is_anonymous() {
-            return "login anonymous".to_string();
+            return vec!["login anonymous".to_string()];
         }
-        match &credentials.password {
-            Some(password) if !password.is_empty() => {
-                format!("login {} {}", credentials.username.trim(), password)
-            }
-            _ => format!("login {}", credentials.username.trim()),
+        let user = credentials.username.trim();
+        let password = credentials
+            .password
+            .as_deref()
+            .map(str::trim)
+            .filter(|password| !password.is_empty());
+        let code = steam_guard_code
+            .map(str::trim)
+            .filter(|code| !code.is_empty());
+
+        match (password, code) {
+            (Some(password), Some(code)) => vec![format!("login {user} {password} {code}")],
+            (Some(password), None) => vec![format!("login {user} {password}")],
+            (None, Some(code)) => vec![
+                format!("set_steam_guard_code {code}"),
+                format!("login {user}"),
+            ],
+            (None, None) => vec![format!("login {user}")],
         }
     }
 }
@@ -185,7 +201,8 @@ impl Downloader for SteamCmd {
 
 /// Builds the `+runscript` content for a game download.
 pub fn build_script(request: &DownloadRequest) -> String {
-    let mut lines = vec![SteamCmd::login_line(&request.credentials)];
+    let mut lines =
+        SteamCmd::login_lines(&request.credentials, request.steam_guard_code.as_deref());
     lines.extend(request.platform.steamcmd_directives());
 
     let mut update = format!("app_update {}", request.appid.trim());
@@ -209,7 +226,8 @@ pub fn build_script(request: &DownloadRequest) -> String {
 }
 
 pub fn build_workshop_script(request: &WorkshopRequest) -> String {
-    let mut lines = vec![SteamCmd::login_line(&request.credentials)];
+    let mut lines =
+        SteamCmd::login_lines(&request.credentials, request.steam_guard_code.as_deref());
     lines.push(format!(
         "workshop_download_item {} {} validate",
         request.appid.trim(),
@@ -317,6 +335,67 @@ mod tests {
             build_workshop_script(&request),
             "login anonymous\nworkshop_download_item 730 999 validate\nquit"
         );
+    }
+
+    #[test]
+    fn builds_script_with_a_steam_guard_code() {
+        let mut request = DownloadRequest::for_job(
+            GameJob::new(Platform::Linux64, "2379780"),
+            Credentials {
+                username: "alice".into(),
+                password: Some("pw".into()),
+            },
+            "/tmp/dl",
+        );
+        request.steam_guard_code = Some("  ABCDE  ".into());
+        assert!(build_script(&request).starts_with("login alice pw ABCDE\n"));
+    }
+
+    #[test]
+    fn builds_script_with_a_guard_code_and_a_cached_login() {
+        let mut request = DownloadRequest::for_job(
+            GameJob::new(Platform::Linux64, "2379780"),
+            Credentials {
+                username: "alice".into(),
+                password: None,
+            },
+            "/tmp/dl",
+        );
+        request.steam_guard_code = Some("ABCDE".into());
+        assert!(build_script(&request).starts_with("set_steam_guard_code ABCDE\nlogin alice\n"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn passes_the_steam_guard_code_to_the_script() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir =
+            std::env::temp_dir().join(format!("steam-press-steamcmd-guard-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("fake-steamcmd.sh");
+        fs::write(
+            &binary,
+            "#!/bin/sh\nscript=\"$4\"\nif grep -q 'login alice pw ABCDE' \"$script\"; then\n  mkdir -p steamapps\n  echo \"Success! App '2379780' fully installed.\"\n  exit 0\nfi\necho 'Steam Guard required'\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut request = DownloadRequest::for_job(
+            GameJob::new(Platform::Linux64, "2379780"),
+            Credentials {
+                username: "alice".into(),
+                password: Some("pw".into()),
+            },
+            &dir,
+        );
+        request.steam_guard_code = Some("ABCDE".into());
+        let mut downloader = SteamCmd::new(Some(binary));
+        let report = downloader
+            .download(&request, &EventSink::noop())
+            .expect("the guard code should be accepted");
+        assert!(report.content_dir.is_dir());
     }
 
     #[test]

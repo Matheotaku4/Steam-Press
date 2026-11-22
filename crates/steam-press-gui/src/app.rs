@@ -16,7 +16,7 @@ use steam_press_core::compressor::Compressor;
 use steam_press_core::config::{Paths, Settings};
 use steam_press_core::credentials::{CredentialStore, SavedCredentials};
 use steam_press_core::depots::DepotNames;
-use steam_press_core::downloader::{Credentials, DownloaderKind};
+use steam_press_core::downloader::{normalize_steam_guard_code, Credentials, DownloaderKind};
 use steam_press_core::events::{EventSink, FinishStatus, PackEvent, Stage};
 use steam_press_core::pack::{PackOptions, Packer};
 use steam_press_core::platform::Platform;
@@ -96,6 +96,13 @@ struct WorkshopForm {
 struct LoginForm {
     username: String,
     password: String,
+    steam_guard_code: String,
+}
+
+#[derive(Debug, Clone)]
+struct GuardRetry {
+    game: Option<GameJob>,
+    workshop: Option<WorkshopJob>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -230,6 +237,7 @@ pub struct SteamPressApp {
     game_form: GameForm,
     workshop_form: WorkshopForm,
     login: LoginForm,
+    guard_retry: Option<GuardRetry>,
     game_search: String,
     game_search_results: Vec<StoreSearchItem>,
     game_search_error: Option<String>,
@@ -289,6 +297,7 @@ impl SteamPressApp {
                 .as_ref()
                 .and_then(|saved| saved.password.clone())
                 .unwrap_or_default(),
+            steam_guard_code: String::new(),
         };
         Self::assemble(paths, settings, depot_names, login)
     }
@@ -341,6 +350,7 @@ impl SteamPressApp {
             game_form: GameForm::default(),
             workshop_form: WorkshopForm::default(),
             login,
+            guard_retry: None,
             game_search: String::new(),
             game_search_results: Vec::new(),
             game_search_error: None,
@@ -556,6 +566,7 @@ impl SteamPressApp {
             dry_run: false,
             fresh: false,
             credentials: self.current_credentials()?,
+            steam_guard_code: normalize_steam_guard_code(Some(&self.login.steam_guard_code)),
             depot_names: self.depot_names.clone(),
         })
     }
@@ -798,6 +809,14 @@ impl SteamPressApp {
                     FinishStatus::Cancelled => "cancelled",
                     FinishStatus::Failed => "failed",
                 };
+                let guard_failure = status == FinishStatus::Failed
+                    && outcome
+                        .to_ascii_lowercase()
+                        .contains("steam guard code required");
+                let guard_retry = guard_failure.then(|| GuardRetry {
+                    game: game.clone(),
+                    workshop: workshop.clone(),
+                });
                 self.record_history(game, workshop, status_key, &outcome, output.clone());
                 let text = match (status, output) {
                     (FinishStatus::Failed, _) => format!("Failed: {outcome}"),
@@ -805,6 +824,7 @@ impl SteamPressApp {
                     (_, None) => format!("{} - {outcome}", status.label()),
                 };
                 self.push_log(level, text);
+                self.guard_retry = guard_retry;
                 if status == FinishStatus::Failed {
                     self.error = Some(outcome);
                 }
@@ -871,6 +891,7 @@ impl SteamPressApp {
         if username.eq_ignore_ascii_case("anonymous") {
             let _ = CredentialStore::new(&self.paths).clear();
             self.login.password.clear();
+            self.login.steam_guard_code.clear();
             self.status_message = Some("Anonymous mode: credentials removed.".to_string());
             return;
         }
@@ -893,6 +914,7 @@ impl SteamPressApp {
             Ok(()) => {
                 self.login.username.clear();
                 self.login.password.clear();
+                self.login.steam_guard_code.clear();
                 self.status_message = Some("Credentials removed.".to_string());
             }
             Err(error) => self.error = Some(error.to_string()),
@@ -1197,6 +1219,10 @@ impl SteamPressApp {
             return;
         };
         let mut dismiss = false;
+        let mut retry_clicked = false;
+        let show_retry = self.guard_retry.is_some();
+        let can_retry = !self.running;
+        let mut code = self.login.steam_guard_code.clone();
         egui::Frame::new()
             .fill(palette.soft(color, 24))
             .stroke(egui::Stroke::new(1.0_f32, palette.soft(color, 90)))
@@ -1212,10 +1238,43 @@ impl SteamPressApp {
                         }
                     });
                 });
+                if show_retry {
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("Steam Guard code")
+                                .size(11.0)
+                                .color(palette.text),
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut code)
+                                .hint_text("email or authenticator code")
+                                .desired_width(180.0),
+                        );
+                        if primary_button(ui, palette, icons::REFRESH, "Retry", can_retry).clicked()
+                        {
+                            retry_clicked = true;
+                        }
+                    });
+                }
             });
+        self.login.steam_guard_code = code;
         if dismiss {
             self.error = None;
             self.status_message = None;
+            self.guard_retry = None;
+        }
+        if retry_clicked {
+            if let Some(retry) = self.guard_retry.take() {
+                self.error = None;
+                if let Some(job) = retry.game {
+                    self.game_queue.push(job);
+                    self.start_games(ui.ctx());
+                } else if let Some(job) = retry.workshop {
+                    self.workshop_queue.push(job);
+                    self.start_workshop(ui.ctx());
+                }
+            }
         }
         ui.add_space(14.0);
     }
@@ -2173,6 +2232,14 @@ impl SteamPressApp {
                 });
             });
             ui.add_space(10.0);
+            field(ui, palette, "Steam Guard code", 240.0, |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.login.steam_guard_code)
+                        .hint_text("email or authenticator code, only when Steam asks")
+                        .desired_width(f32::INFINITY),
+                );
+            });
+            ui.add_space(10.0);
             ui.horizontal(|ui| {
                 if secondary_button(ui, palette, icons::SAVE, "Save credentials").clicked() {
                     action = Some(UiAction::SaveLogin);
@@ -2184,7 +2251,8 @@ impl SteamPressApp {
             ui.add_space(6.0);
             ui.label(
                 egui::RichText::new(
-                    "Passwords are never logged and never passed on a command line to DepotDownloader.",
+                    "Passwords are never logged and never passed on a command line to DepotDownloader. \
+                     A Steam Guard code is one-shot: enter a fresh code, then retry the failed job.",
                 )
                 .size(10.5)
                 .color(palette.muted),
@@ -2872,7 +2940,35 @@ mod tests {
             EntryStatus::Failed(_)
         ));
         assert_eq!(app.error.as_deref(), Some("Steam is rate limiting"));
+        assert!(app.guard_retry.is_none());
         assert!(app.log.iter().any(|entry| entry.level == LogLevel::Error));
+    }
+
+    #[test]
+    fn steam_guard_failure_offers_a_retry_with_a_fresh_code() {
+        let mut app = test_app("guard-retry");
+        let job = GameJob::new(Platform::Linux64, "21");
+        app.game_queue.push(job.clone());
+        app.handle_event(PackEvent::Finished {
+            job: job.encode(),
+            status: FinishStatus::Failed,
+            outcome: "Steam Guard code required; enter a fresh code and retry".to_string(),
+            output: None,
+        });
+        let retry = app.guard_retry.as_ref().expect("guard retry is offered");
+        assert_eq!(retry.game.as_ref().map(GameJob::encode), Some(job.encode()));
+        assert!(retry.workshop.is_none());
+        assert!(app.login.steam_guard_code.is_empty());
+    }
+
+    #[test]
+    fn pack_options_carry_a_trimmed_steam_guard_code() {
+        let mut app = test_app("guard-options");
+        app.login.username = "alice".to_string();
+        app.login.password = "secret".to_string();
+        app.login.steam_guard_code = "  ABCDE  ".to_string();
+        let options = app.pack_options().unwrap();
+        assert_eq!(options.steam_guard_code.as_deref(), Some("ABCDE"));
     }
 
     #[test]

@@ -4,6 +4,13 @@
 est ajouté dans le commit de passation qui suit, sur la branche
 `feat/1.0.3-json-contracts`.
 
+> **Mise à jour du 2026-11-22** — la connexion Steam Guard est maintenant implémentée
+> sur la branche `feat/1.0.3-steam-guard` : `--steam-guard-code` pour `pack` et
+> `workshop run`, prompt interactif unique, champ et bouton **Retry** dans la GUI,
+> transmission du code à DepotDownloader par l'entrée standard. Les vérifications
+> `fmt`, `clippy` et `cargo test --workspace` passent. La procédure PR / CodeRabbit /
+> merge / release ci-dessous reste la référence.
+
 ## En une phrase
 
 Le code, les tests et la documentation de la 1.0.3 sont prêts et poussés. Il reste à

@@ -8,6 +8,11 @@ All notable changes are documented here. The format follows
 
 ### Added
 
+- Steam Guard support for real accounts. `pack` and `workshop run` accept
+  `--steam-guard-code`; the CLI prompts once for a fresh code in interactive
+  mode, and the GUI exposes the code in Settings plus a Retry action on the
+  failure banner. DepotDownloader receives the password and code on stdin,
+  never on the command line.
 - Exact offline snapshots for the `doctor`, `search`, `info`, `pack` and
   `import` JSON documents. Their builders are now pure functions, so every
   stable field is checked without network access or a Steam account.
@@ -18,6 +23,16 @@ All notable changes are documented here. The format follows
 
 - `docs/json-schema.md` lists the five additional contract tests and the
   offline guarantee they provide.
+- `docs/usage.md` documents the Steam Guard flow and the `--steam-guard-code`
+  option.
+
+### Fixed
+
+- DepotDownloader prompts for Steam Guard are now reported as Steam Guard
+  failures instead of a generic exit code, so the CLI and GUI can ask for a
+  fresh code and retry.
+- A freshly written sidecar that is briefly busy (`ETXTBSY`) is retried
+  instead of failing the job immediately.
 
 ## [1.0.2] - 2026-11-14
 

@@ -191,6 +191,25 @@ fn import_json(outcome: &ImportOutcome) -> serde_json::Value {
     })
 }
 
+fn steam_guard_required(status: &PackStatus) -> bool {
+    matches!(
+        status,
+        PackStatus::Failed(message)
+            if message.to_ascii_lowercase().contains("steam guard code required")
+    )
+}
+
+/// Asks for a one-shot code only when a human can answer. JSON output and
+/// redirected stdin stay fully non-interactive.
+fn prompt_steam_guard_code(interactive: bool) -> Result<Option<String>, String> {
+    use std::io::IsTerminal;
+    if !interactive || !std::io::stdin().is_terminal() {
+        return Ok(None);
+    }
+    let code = support::prompt("Steam Guard code: ")?;
+    Ok(downloader::normalize_steam_guard_code(Some(&code)))
+}
+
 pub fn dispatch(cli: Cli) -> Result<ExitCode, String> {
     match &cli.command {
         Command::Doctor => doctor(&cli),
@@ -655,6 +674,7 @@ fn pack(cli: &Cli, args: &PackArgs) -> Result<ExitCode, String> {
         dry_run: args.dry_run,
         fresh: args.fresh,
         credentials,
+        steam_guard_code: downloader::normalize_steam_guard_code(args.steam_guard_code.as_deref()),
         depot_names,
     };
     let sink = if cli.json {
@@ -666,8 +686,14 @@ fn pack(cli: &Cli, args: &PackArgs) -> Result<ExitCode, String> {
     let mut outcomes = Vec::new();
 
     for job in &jobs {
-        let packer = Packer::new(options.clone());
-        let outcome = packer.run(job, sink.clone());
+        let mut job_options = options.clone();
+        let mut outcome = Packer::new(job_options.clone()).run(job, sink.clone());
+        if steam_guard_required(&outcome.status) {
+            if let Some(code) = prompt_steam_guard_code(!cli.json)? {
+                job_options.steam_guard_code = Some(code);
+                outcome = Packer::new(job_options).run(job, sink.clone());
+            }
+        }
         match &outcome.status {
             PackStatus::Completed | PackStatus::Skipped => {
                 if !cli.json {
@@ -912,6 +938,7 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
             compressor,
             no_compress,
             anonymous,
+            steam_guard_code,
         } => {
             let (paths, mut settings) = support::load_settings(cli)?;
             let (compressor, skip) = resolve_compressor(compressor, *no_compress)?;
@@ -936,6 +963,9 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
                 dry_run: false,
                 fresh: false,
                 credentials,
+                steam_guard_code: downloader::normalize_steam_guard_code(
+                    steam_guard_code.as_deref(),
+                ),
                 depot_names: DepotNames::default(),
             };
             let sink = if cli.json {
@@ -946,8 +976,14 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
             let mut failed = 0;
             let mut results = Vec::new();
             for job in &jobs {
-                let packer = WorkshopPacker::new(options.clone());
-                let outcome = packer.run(job, sink.clone());
+                let mut job_options = options.clone();
+                let mut outcome = WorkshopPacker::new(job_options.clone()).run(job, sink.clone());
+                if steam_guard_required(&outcome.status) {
+                    if let Some(code) = prompt_steam_guard_code(!cli.json)? {
+                        job_options.steam_guard_code = Some(code);
+                        outcome = WorkshopPacker::new(job_options).run(job, sink.clone());
+                    }
+                }
                 results.push(serde_json::json!({
                     "job": outcome.stem,
                     "status": match &outcome.status {
@@ -1083,6 +1119,17 @@ mod tests {
         let document = json_document(serde_json::json!({"ok": true, "count": 2}));
         assert_eq!(document["schemaVersion"], 1);
         assert_eq!(document["count"], 2);
+    }
+
+    #[test]
+    fn steam_guard_failures_are_detected() {
+        assert!(steam_guard_required(&PackStatus::Failed(
+            "Steam Guard code required; enter a fresh code and retry".to_string()
+        )));
+        assert!(!steam_guard_required(&PackStatus::Failed(
+            "invalid Steam credentials".to_string()
+        )));
+        assert!(!steam_guard_required(&PackStatus::Completed));
     }
 
     #[test]

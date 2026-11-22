@@ -108,6 +108,30 @@ chaque archive est testée avec l'outil de compression après sa création (mot 
 Les dépôts partagés (`shareddepots`) sont téléchargés avec le jeu et reçoivent un
 `appmanifest_228980.acf` valide dans `steamapps`.
 
+### Steam Guard
+
+Un compte protégé par Steam Guard peut demander un code envoyé par e-mail ou généré par
+l'application mobile. Le code est **à usage unique** et n'est jamais enregistré.
+
+```bash
+# Code fourni une seule fois pour ce lot.
+steam-press pack --steam-guard-code 12345
+
+# Même option pour l'atelier.
+steam-press workshop run --queue ./atelier.sswq --steam-guard-code 12345
+```
+
+En mode interactif (sans `--json` et avec un terminal), si Steam réclame un code,
+Steam Press affiche `Steam Guard code:` et relance le job une fois le code saisi. En
+mode `--json`, aucun prompt n'est émis : fournissez `--steam-guard-code`, sinon le job
+échoue avec un message explicite.
+
+Avec SteamCMD, le code est placé dans le script temporaire `0600` supprimé après le job.
+Avec DepotDownloader, le mot de passe et le code sont écrits sur l'entrée standard du
+processus, jamais sur la ligne de commande. Dans la GUI, le champ **Steam Guard code**
+se trouve dans **Settings > Steam account** ; après un échec, le bandeau d'erreur propose
+un champ et un bouton **Retry** pour saisir un code frais.
+
 ## 5. Import local et diff
 
 ```bash
@@ -227,7 +251,7 @@ d'un job terminé, de consulter son journal et de le relancer.
 | `SteamCMD introuvable` | installez SteamCMD ou renseignez `steamcmdpath` |
 | `ce compte ne possède pas ce jeu` | le compte doit posséder l'app (`No subscription`) |
 | `Steam limite temporairement les téléchargements` | attendez avant de relancer (`Rate Limit Exceeded`) |
-| `identifiants Steam invalides ou Steam Guard requis` | relancez `steam-press login`, validez Steam Guard dans SteamCMD |
+| `identifiants Steam invalides ou Steam Guard requis` | vérifiez le mot de passe, puis relancez avec `--steam-guard-code` ou saisissez le code affiché par SteamCMD |
 | `7-Zip introuvable` | installez `p7zip-full` ou renseignez `sevenzippath` |
 | `aucun identifiant enregistré` | `steam-press login` ou `--anonymous` |
 
@@ -237,6 +261,8 @@ d'un job terminé, de consulter son journal et de le relancer.
 - Le fichier `credentials.bin` est créé en mode `0600`.
 - Les mots de passe ne sont jamais journalisés et ne sont pas passés en argument de
   processus à DepotDownloader.
+- Les codes Steam Guard sont à usage unique, jamais enregistrés, et transmis à
+  DepotDownloader par l'entrée standard.
 - Le script SteamCMD temporaire est lui aussi créé en `0600` puis supprimé.
 
 Le modèle de menace complet et les limites du coffre sont décrits dans

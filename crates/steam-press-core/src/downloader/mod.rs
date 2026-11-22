@@ -51,6 +51,15 @@ pub struct Credentials {
     pub password: Option<String>,
 }
 
+/// Trims a Steam Guard code and drops an empty value, so engines never send
+/// a blank argument to SteamCMD or DepotDownloader.
+pub fn normalize_steam_guard_code(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+        .map(str::to_string)
+}
+
 impl Credentials {
     pub fn anonymous() -> Self {
         Self {
@@ -84,6 +93,8 @@ pub struct DownloadRequest {
     pub install_dir: Option<String>,
     pub depots: Vec<DepotSelector>,
     pub validate: bool,
+    /// One-shot Steam Guard code supplied by the user. It is never persisted.
+    pub steam_guard_code: Option<String>,
 }
 
 impl DownloadRequest {
@@ -103,6 +114,7 @@ impl DownloadRequest {
             install_dir: None,
             depots: Vec::new(),
             validate: true,
+            steam_guard_code: None,
         }
     }
 }
@@ -113,6 +125,8 @@ pub struct WorkshopRequest {
     pub workshop_id: String,
     pub credentials: Credentials,
     pub work_dir: PathBuf,
+    /// One-shot Steam Guard code supplied by the user. It is never persisted.
+    pub steam_guard_code: Option<String>,
 }
 
 impl WorkshopRequest {
@@ -122,6 +136,7 @@ impl WorkshopRequest {
             workshop_id: job.workshop_id,
             credentials,
             work_dir: work_dir.into(),
+            steam_guard_code: None,
         }
     }
 }
@@ -163,9 +178,9 @@ impl fmt::Display for DownloadError {
                 formatter.write_str("Steam is temporarily rate limiting downloads")
             }
             Self::NoSubscription => formatter.write_str("this account does not own the game"),
-            Self::SteamGuardRequired => {
-                formatter.write_str("Steam Guard must be approved before continuing")
-            }
+            Self::SteamGuardRequired => formatter.write_str(
+                "Steam Guard code required; enter a fresh code and retry (CLI: --steam-guard-code, GUI: Settings > Steam account)",
+            ),
             Self::Failed(message) => formatter.write_str(message),
             Self::Cancelled => formatter.write_str("operation cancelled"),
         }

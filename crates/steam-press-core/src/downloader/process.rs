@@ -1,7 +1,7 @@
 //! Cancellation-aware child process execution with streamed output.
 
 use crate::events::{CancellationToken, EventSink, PackEvent};
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -14,18 +14,58 @@ pub(crate) struct CommandOutput {
 }
 
 pub(crate) fn run_streaming(
-    mut command: Command,
+    command: Command,
     cancel: &CancellationToken,
     sink: &EventSink,
 ) -> Result<CommandOutput, DownloadError> {
+    run_streaming_with_input(command, cancel, sink, None)
+}
+
+/// Runs a child process and optionally writes `input` to its stdin before
+/// reading the output. The engines use this for interactive prompts such as
+/// DepotDownloader's password and Steam Guard questions.
+pub(crate) fn run_streaming_with_input(
+    mut command: Command,
+    cancel: &CancellationToken,
+    sink: &EventSink,
+    input: Option<String>,
+) -> Result<CommandOutput, DownloadError> {
     command
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
-    let mut child = command
-        .spawn()
-        .map_err(|error| DownloadError::Failed(format!("could not start the process: {error}")))?;
+    let mut child = {
+        let mut attempts = 0;
+        loop {
+            match command.spawn() {
+                Ok(child) => break child,
+                // A freshly written sidecar can still be open elsewhere for a
+                // few milliseconds (ETXTBSY). Retrying avoids a spurious failure.
+                Err(error) if error.raw_os_error() == Some(26) && attempts < 20 => {
+                    attempts += 1;
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(error) => {
+                    return Err(DownloadError::Failed(format!(
+                        "could not start the process: {error}"
+                    )))
+                }
+            }
+        }
+    };
+
+    if let Some(input) = input {
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(input.as_bytes()).map_err(|error| {
+                DownloadError::Failed(format!("could not send input to the process: {error}"))
+            })?;
+        }
+    }
 
     let mut readers = Vec::new();
     if let Some(stdout) = child.stdout.take() {
