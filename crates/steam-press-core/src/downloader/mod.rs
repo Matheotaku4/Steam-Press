@@ -179,7 +179,7 @@ impl fmt::Display for DownloadError {
             }
             Self::NoSubscription => formatter.write_str("this account does not own the game"),
             Self::SteamGuardRequired => formatter.write_str(
-                "Steam Guard code required; enter a fresh code and retry (CLI: --steam-guard-code, GUI: Settings > Steam account)",
+                "Steam Guard code required or mobile approval missing; approve the login or enter a fresh code, then retry (CLI: --steam-guard-code, GUI: Settings > Steam account)",
             ),
             Self::Failed(message) => formatter.write_str(message),
             Self::Cancelled => formatter.write_str("operation cancelled"),

@@ -122,13 +122,7 @@ impl Downloader for SteamCmd {
         let output = result?;
 
         let steamapps = request.work_dir.join("steamapps");
-        classify_run(
-            output.code,
-            &output.output,
-            "",
-            steamapps.is_dir() || output.code == 0,
-            true,
-        )?;
+        classify_run(output.code, &output.output, "", steamapps.is_dir(), true)?;
 
         let manifest = steamapps.join(format!("appmanifest_{}.acf", request.appid));
         Ok(DownloadReport {
@@ -174,13 +168,13 @@ impl Downloader for SteamCmd {
         let result = run_streaming(command, &self.cancel, sink);
         let _ = fs::remove_file(&script_path);
         let output = result?;
-        classify_run(output.code, &output.output, "", true, true)?;
-
         let content = request
             .work_dir
             .join("steamapps/workshop/content")
             .join(&request.appid)
             .join(&request.workshop_id);
+        classify_run(output.code, &output.output, "", content.is_dir(), true)?;
+
         Ok(WorkshopReport {
             content_dir: if content.is_dir() {
                 content
@@ -238,11 +232,17 @@ pub fn build_workshop_script(request: &WorkshopRequest) -> String {
 }
 
 /// Maps SteamCMD output to a typed error. Priority mirrors SuperSteamPacker.
+///
+/// `has_content` is true when the engine produced its expected output
+/// directory. A Steam Guard line is only a failure when the run did not
+/// succeed: SteamCMD prints "Steam Guard must be approved before continuing"
+/// while it waits for a mobile confirmation, and that line also appears in the
+/// log of a successful login.
 pub fn classify_run(
     exit_code: i32,
     content_log: &str,
     connection_log: &str,
-    has_sitelicense: bool,
+    has_content: bool,
     has_compat_log: bool,
 ) -> Result<(), DownloadError> {
     let combined = format!("{content_log}\n{connection_log}");
@@ -257,7 +257,7 @@ pub fn classify_run(
         return Err(DownloadError::InvalidCredentials);
     }
     let lower = combined.to_ascii_lowercase();
-    if lower.contains("steam guard") {
+    if lower.contains("steam guard") && (exit_code != 0 || !has_content) {
         return Err(DownloadError::SteamGuardRequired);
     }
     if lower.contains("failed to connect")
@@ -269,7 +269,7 @@ pub fn classify_run(
         ));
     }
     if exit_code != 0 {
-        if !has_sitelicense && !has_compat_log {
+        if !has_content && !has_compat_log {
             return Err(DownloadError::SteamGuardRequired);
         }
         return Err(DownloadError::Failed(format!(
@@ -377,7 +377,7 @@ mod tests {
         let binary = dir.join("fake-steamcmd.sh");
         fs::write(
             &binary,
-            "#!/bin/sh\nscript=\"$4\"\nif grep -q 'login alice pw ABCDE' \"$script\"; then\n  mkdir -p steamapps\n  echo \"Success! App '2379780' fully installed.\"\n  exit 0\nfi\necho 'Steam Guard required'\nexit 1\n",
+            "#!/bin/sh\nscript=\"$4\"\nif grep -q 'login alice pw ABCDE' \"$script\"; then\n  mkdir -p steamapps\n  echo \"Steam Guard must be approved before continuing\"\n  echo \"Success! App '2379780' fully installed.\"\n  exit 0\nfi\necho 'Steam Guard required'\nexit 1\n",
         )
         .unwrap();
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
@@ -418,6 +418,26 @@ mod tests {
         );
         assert_eq!(
             classify_run(1, "Steam Guard required", "", true, true),
+            Err(DownloadError::SteamGuardRequired)
+        );
+        assert_eq!(
+            classify_run(
+                0,
+                "Steam Guard must be approved before continuing\nSuccess! App '2379780' fully installed.",
+                "",
+                true,
+                true
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            classify_run(
+                0,
+                "Steam Guard must be approved before continuing",
+                "",
+                false,
+                true
+            ),
             Err(DownloadError::SteamGuardRequired)
         );
         match classify_run(1, "Failed to connect to Steam", "", true, true) {
