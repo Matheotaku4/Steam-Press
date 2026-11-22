@@ -187,8 +187,9 @@ d'un run CI sont dans ses artifacts, pas dans `dist/` : les récupérer et
 reconstruire `SHA256SUMS` avant l'envoi.
 
 ```bash
+rm -rf artifacts dist
+mkdir -p artifacts dist
 gh run download <run-id> --pattern 'dist-*' --dir artifacts
-mkdir -p dist
 find artifacts -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) -exec cp {} dist/ \;
 cd dist && sha256sum ./*.tar.gz > SHA256SUMS
 gh release upload v1.0.3 ./*.tar.gz ./*.tar.gz.sha256 SHA256SUMS --clobber
