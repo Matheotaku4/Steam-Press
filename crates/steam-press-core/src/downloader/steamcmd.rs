@@ -234,10 +234,11 @@ pub fn build_workshop_script(request: &WorkshopRequest) -> String {
 /// Maps SteamCMD output to a typed error. Priority mirrors SuperSteamPacker.
 ///
 /// `has_content` is true when the engine produced its expected output
-/// directory. A Steam Guard line is only a failure when the run did not
-/// succeed: SteamCMD prints "Steam Guard must be approved before continuing"
-/// while it waits for a mobile confirmation, and that line also appears in the
-/// log of a successful login.
+/// directory. A Steam Guard line is only ignored when this run also logged
+/// SteamCMD's success marker: a stale `steamapps` directory from a previous
+/// attempt is not enough, because SteamCMD keeps
+/// "Steam Guard must be approved before continuing" in the log of a successful
+/// mobile confirmation.
 pub fn classify_run(
     exit_code: i32,
     content_log: &str,
@@ -257,7 +258,10 @@ pub fn classify_run(
         return Err(DownloadError::InvalidCredentials);
     }
     let lower = combined.to_ascii_lowercase();
-    if lower.contains("steam guard") && (exit_code != 0 || !has_content) {
+    let succeeded = lower.contains("success! app")
+        || lower.contains("fully installed")
+        || lower.contains("success. downloaded item");
+    if lower.contains("steam guard") && (exit_code != 0 || !succeeded) {
         return Err(DownloadError::SteamGuardRequired);
     }
     if lower.contains("failed to connect")
@@ -439,6 +443,26 @@ mod tests {
                 true
             ),
             Err(DownloadError::SteamGuardRequired)
+        );
+        assert_eq!(
+            classify_run(
+                0,
+                "Steam Guard must be approved before continuing",
+                "",
+                true,
+                true
+            ),
+            Err(DownloadError::SteamGuardRequired)
+        );
+        assert_eq!(
+            classify_run(
+                0,
+                "Steam Guard must be approved before continuing\nSuccess. Downloaded item 999 to /tmp/dl",
+                "",
+                true,
+                true
+            ),
+            Ok(())
         );
         match classify_run(1, "Failed to connect to Steam", "", true, true) {
             Err(DownloadError::Failed(message)) => assert!(message.contains("network error")),

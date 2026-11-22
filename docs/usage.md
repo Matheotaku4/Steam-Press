@@ -130,8 +130,9 @@ Avec SteamCMD, le code est placé dans le script temporaire `0600` supprimé apr
 Si vous approuvez plutôt la connexion dans l'application mobile, SteamCMD peut afficher
 `Steam Guard must be approved before continuing` : cette ligne reste dans le journal même
 quand la connexion réussit, et Steam Press ne la traite comme un échec que si SteamCMD
-sort en erreur ou ne produit aucun contenu. Avec DepotDownloader, le mot de passe et le
-code sont écrits sur l'entrée standard du processus, jamais sur la ligne de commande.
+sort en erreur ou n'affiche pas son marqueur de succès (un dossier de contenu déjà présent
+ne suffit pas). Avec DepotDownloader, le mot de passe et le code sont écrits sur l'entrée
+standard du processus, jamais sur la ligne de commande.
 Dans la GUI, le champ **Steam Guard code** se trouve dans **Settings > Steam account** ;
 après un échec, le bandeau d'erreur propose un champ et un bouton **Retry** pour saisir
 un code frais ou relancer après approbation mobile.

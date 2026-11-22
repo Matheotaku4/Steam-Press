@@ -11,7 +11,8 @@ All notable changes are documented here. The format follows
 - SteamCMD no longer reports a Steam Guard failure when a successful login
   prints "Steam Guard must be approved before continuing" after the user
   confirms the login on the mobile app. A Steam Guard line is only treated as
-  a failure when SteamCMD exits nonzero or produces no content directory.
+  a failure when SteamCMD exits nonzero or the run does not log its success
+  marker; a stale content directory from a previous attempt is not enough.
 - The Steam Guard error now mentions mobile approval as well as a fresh code.
 
 ## [1.0.3] - 2026-11-21
