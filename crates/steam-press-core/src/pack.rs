@@ -91,6 +91,10 @@ pub struct PackOptions {
     pub dry_run: bool,
     pub fresh: bool,
     pub credentials: Credentials,
+    /// One-shot Steam Guard code. It is never persisted in the settings;
+    /// SteamCMD writes it to a short-lived private script and DepotDownloader
+    /// receives it on stdin.
+    pub steam_guard_code: Option<String>,
     pub depot_names: DepotNames,
 }
 
@@ -112,6 +116,7 @@ impl PackOptions {
             dry_run: false,
             fresh: false,
             credentials: Credentials::anonymous(),
+            steam_guard_code: None,
             depot_names: DepotNames::default(),
         }
     }
@@ -439,6 +444,7 @@ impl Packer {
                     })
                     .collect(),
                 validate: true,
+                steam_guard_code: self.options.steam_guard_code.clone(),
             };
 
             let report = match downloader.download(&request, &sink) {

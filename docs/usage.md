@@ -31,7 +31,7 @@ cargo build --release -p steam-press-cli
 `doctor` doit afficher les chemins de SteamCMD et 7-Zip, le nombre de dépôts connus, un
 dossier de sortie inscriptible, l'espace libre, l'état du coffre d'identifiants, la
 joignabilité de l'API Steam, la présence de SteamCMD et les versions de 7-Zip,
-RAR et DepotDownloader (minimums : 21.0, 6.0 et 3.0.0). SteamCMD n'expose pas
+RAR et DepotDownloader (minimums : 21.0, 6.0 et 3.3.0). SteamCMD n'expose pas
 de version sémantique stable : seule sa présence est vérifiée. Une version trop
 ancienne ou un outil absent est signalé avec l'action corrective correspondante. Les codes de sortie sont documentés dans
 [exit-codes.md](exit-codes.md).
@@ -107,6 +107,30 @@ chaque archive est testée avec l'outil de compression après sa création (mot 
 
 Les dépôts partagés (`shareddepots`) sont téléchargés avec le jeu et reçoivent un
 `appmanifest_228980.acf` valide dans `steamapps`.
+
+### Steam Guard
+
+Un compte protégé par Steam Guard peut demander un code envoyé par e-mail ou généré par
+l'application mobile. Le code est **à usage unique** et n'est jamais enregistré.
+
+```bash
+# Code fourni une seule fois pour ce lot.
+steam-press pack --steam-guard-code 12345
+
+# Même option pour l'atelier.
+steam-press workshop run --queue ./atelier.sswq --steam-guard-code 12345
+```
+
+En mode interactif (sans `--json` et avec un terminal), si Steam réclame un code,
+Steam Press affiche `Steam Guard code:` et relance le job une fois le code saisi. En
+mode `--json`, aucun prompt n'est émis : fournissez `--steam-guard-code`, sinon le job
+échoue avec un message explicite.
+
+Avec SteamCMD, le code est placé dans le script temporaire `0600` supprimé après le job.
+Avec DepotDownloader, le mot de passe et le code sont écrits sur l'entrée standard du
+processus, jamais sur la ligne de commande. Dans la GUI, le champ **Steam Guard code**
+se trouve dans **Settings > Steam account** ; après un échec, le bandeau d'erreur propose
+un champ et un bouton **Retry** pour saisir un code frais.
 
 ## 5. Import local et diff
 
@@ -227,7 +251,7 @@ d'un job terminé, de consulter son journal et de le relancer.
 | `SteamCMD introuvable` | installez SteamCMD ou renseignez `steamcmdpath` |
 | `ce compte ne possède pas ce jeu` | le compte doit posséder l'app (`No subscription`) |
 | `Steam limite temporairement les téléchargements` | attendez avant de relancer (`Rate Limit Exceeded`) |
-| `identifiants Steam invalides ou Steam Guard requis` | relancez `steam-press login`, validez Steam Guard dans SteamCMD |
+| `identifiants Steam invalides ou Steam Guard requis` | vérifiez le mot de passe, puis relancez avec `--steam-guard-code` ou saisissez le code affiché par SteamCMD |
 | `7-Zip introuvable` | installez `p7zip-full` ou renseignez `sevenzippath` |
 | `aucun identifiant enregistré` | `steam-press login` ou `--anonymous` |
 
@@ -237,8 +261,44 @@ d'un job terminé, de consulter son journal et de le relancer.
 - Le fichier `credentials.bin` est créé en mode `0600`.
 - Les mots de passe ne sont jamais journalisés et ne sont pas passés en argument de
   processus à DepotDownloader.
+- Les codes Steam Guard sont à usage unique, jamais enregistrés, et transmis à
+  DepotDownloader par l'entrée standard.
 - Le script SteamCMD temporaire est lui aussi créé en `0600` puis supprimé.
 
 Le modèle de menace complet et les limites du coffre sont décrits dans
 [security-review.md](security-review.md). La sortie `--json` et sa version de schéma sont
 décrites dans [json-schema.md](json-schema.md).
+
+## 13. Aperçu de la GUI
+
+La GUI reprend les mêmes réglages et files que le CLI. Les captures ci-dessous ont été
+prises avec la version 1.0.2 sous Linux/X11 ; elles servent de référence visuelle, pas de
+promesse de rendu identique sur chaque plateforme.
+
+### Library
+
+![Library — file de jeux](screenshots/library.png)
+
+### Workshop
+
+![Workshop — objets de communauté](screenshots/workshop.png)
+
+### History
+
+![History — jobs terminés](screenshots/history.png)
+
+### Depots
+
+![Depots — noms des dépôts](screenshots/depots.png)
+
+### Settings
+
+![Settings — moteur et chemins](screenshots/settings.png)
+
+### Thème clair
+
+![Settings en thème clair](screenshots/light-theme.png)
+
+La file et l'historique sont enregistrés dans le dossier de configuration ; ils sont
+restaurés au lancement suivant. Le bouton de thème bascule entre clair et sombre
+immédiatement ; pour conserver le choix, utilisez **Save settings**.

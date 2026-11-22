@@ -1,7 +1,7 @@
 //! Workshop item pipeline: download, normalize, archive.
 
 use crate::archive;
-use crate::downloader::{self, Credentials, DownloadError, WorkshopRequest};
+use crate::downloader::{self, DownloadError, WorkshopRequest};
 use crate::events::{CancellationToken, EventSink, FinishStatus, PackEvent, Stage};
 use crate::pack::{compress_directory, move_children, CompressOutcome, PackOptions};
 use crate::queue::WorkshopJob;
@@ -110,14 +110,13 @@ impl WorkshopPacker {
             *slot = Some(downloader.cancel_token());
         }
 
-        let request = WorkshopRequest::new(
-            job.clone(),
-            Credentials {
-                username: self.options.credentials.username.clone(),
-                password: self.options.credentials.password.clone(),
-            },
-            work_dir.clone(),
-        );
+        let request = WorkshopRequest {
+            appid: job.appid.clone(),
+            workshop_id: job.workshop_id.clone(),
+            credentials: self.options.credentials.clone(),
+            work_dir: work_dir.clone(),
+            steam_guard_code: self.options.steam_guard_code.clone(),
+        };
 
         let report = match downloader.download_workshop(&request, &sink) {
             Ok(report) => report,

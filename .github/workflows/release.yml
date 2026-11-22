@@ -5,9 +5,14 @@ on:
     branches: [main]
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
@@ -21,6 +26,11 @@ jobs:
       publish: ${{ steps.release.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
+      - name: Restrict manual runs to main
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::manual releases must run from main"
+          exit 1
       - name: Read crate version
         id: version
         run: |
@@ -91,6 +101,7 @@ jobs:
           cp docs/usage.md docs/migration-1.0.md docs/security-review.md \
             docs/exit-codes.md docs/json-schema.md docs/real-test-1.0.1.md \
             "dist/${combined}/docs/"
+          cp -R docs/screenshots "dist/${combined}/docs/"
           tar -C dist -czf "dist/${combined}.tar.gz" "${combined}"
 
           cli="steam-press-cli-${version}-${platform}"
@@ -100,6 +111,7 @@ jobs:
           cp docs/usage.md docs/migration-1.0.md docs/security-review.md \
             docs/exit-codes.md docs/json-schema.md docs/real-test-1.0.1.md \
             "dist/${cli}/docs/"
+          cp -R docs/screenshots "dist/${cli}/docs/"
           tar -C dist -czf "dist/${cli}.tar.gz" "${cli}"
 
           gui="steam-press-gui-${version}-${platform}"
@@ -109,6 +121,7 @@ jobs:
           cp docs/usage.md docs/migration-1.0.md docs/security-review.md \
             docs/exit-codes.md docs/json-schema.md docs/real-test-1.0.1.md \
             "dist/${gui}/docs/"
+          cp -R docs/screenshots "dist/${gui}/docs/"
           tar -C dist -czf "dist/${gui}.tar.gz" "${gui}"
 
           checksum() {
@@ -136,6 +149,9 @@ jobs:
     if: always() && needs.prepare.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         continue-on-error: true
         with:
@@ -158,9 +174,21 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ needs.prepare.outputs.version }}"
-          gh release create "v${version}" \
+          tag="v${version}"
+          target=()
+          if git rev-parse --verify "refs/tags/${tag}" >/dev/null 2>&1; then
+            tag_commit=$(git rev-list -n 1 "${tag}")
+            if [ "${tag_commit}" != "${{ github.sha }}" ]; then
+              echo "::error::${tag} points to ${tag_commit}, not ${{ github.sha }}"
+              exit 1
+            fi
+          else
+            target=(--target "${{ github.sha }}")
+          fi
+          gh release create "${tag}" \
             dist/*.tar.gz \
             dist/*.tar.gz.sha256 \
             dist/SHA256SUMS \
             --title "Steam Press v${version}" \
-            --generate-notes
+            --generate-notes \
+            "${target[@]}"

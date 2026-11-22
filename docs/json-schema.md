@@ -9,8 +9,21 @@ Toutes les commandes qui acceptent `--json` produisent un objet JSON avec :
 }
 ```
 
-`ok` vaut `false` et `error` contient un message quand la commande échoue.
-Le code de sortie reste la source de vérité (voir `exit-codes.md`).
+`ok` vaut `false` quand la commande échoue. Le code de sortie reste la
+source de vérité (voir `exit-codes.md`).
+
+Deux formes d'échec coexistent :
+
+- une erreur de dispatch (configuration illisible, outil manquant, valeur
+  refusée par une commande) produit un objet de premier niveau avec `ok: false`
+  et `error` ;
+- un échec d'un travail de lot (`pack`, `workshop run`) produit `ok: false`
+  et le détail dans l'entrée du travail (`jobs[].error`). Il n'y a pas de champ
+  `error` de premier niveau dans ce cas.
+
+Les erreurs de syntaxe détectées par `Cli::parse()` (par exemple une option
+inconnue) sont écrites sur stderr et sortent avec le code 2 : elles ne
+produisent pas d'objet JSON, même avec `--json`.
 
 ## Commandes
 
@@ -51,8 +64,12 @@ compatibles et ne changent pas la version.
 
 `crates/steam-press-cli/tests/json_snapshots.rs` compare la sortie complète de
 `queue list`, `workshop list`, `depots list`, `login`, `template render` et
-`diff` à des valeurs de référence. Le test vérifie aussi qu'une sortie `--json`
-ne contient rien d'autre que l'objet JSON (notamment pour une file vide) et
-qu'une erreur produit `ok: false`, `error` et `schemaVersion`. Ces tests
-s'exécutent hors ligne ; toute modification d'un champ stable fait échouer la
-CI et impose une décision explicite sur `schemaVersion`.
+`diff` à des valeurs de référence. Il vérifie aussi qu'une sortie `--json` ne
+contient rien d'autre que l'objet JSON (notamment pour une file vide) et qu'une
+erreur de dispatch produit `ok: false`, `error` et `schemaVersion`.
+
+Les documents qui dépendent de Steam passent par des constructeurs purs testés
+dans `commands.rs` : `doctor`, `search`, `info`, `pack` et `import` ont chacun
+un snapshot exact avec des objets représentatifs. Ces tests s'exécutent hors
+ligne ; toute modification d'un champ stable fait échouer la CI et impose une
+décision explicite sur `schemaVersion`.

@@ -1,6 +1,6 @@
 //! DepotDownloader engine: deterministic depot selection through the sidecar.
 
-use super::process::run_streaming;
+use super::process::{run_streaming_with_input, CommandOutput};
 use super::{
     DownloadError, DownloadReport, DownloadRequest, Downloader, DownloaderKind, ToolStatus,
     WorkshopReport, WorkshopRequest,
@@ -83,13 +83,11 @@ impl Downloader for DepotDownloader {
 
         let mut command = Command::new(binary);
         command.args(&args).current_dir(&request.work_dir);
-        let output = run_streaming(command, &self.cancel, sink)?;
+        let input = stdin_input(&request.credentials, request.steam_guard_code.as_deref())?;
+        let output = run_streaming_with_input(command, &self.cancel, sink, input)?;
 
         if output.code != 0 {
-            return Err(DownloadError::Failed(format!(
-                "DepotDownloader exited with code {}",
-                output.code
-            )));
+            return Err(classify_failure(output));
         }
 
         let content_dir = stage_download(request)?;
@@ -127,14 +125,15 @@ impl Downloader for DepotDownloader {
             command
                 .arg("-username")
                 .arg(request.credentials.username.trim());
+            if has_steam_guard_code(request.steam_guard_code.as_deref()) {
+                command.arg("-no-mobile");
+            }
         }
 
-        let output = run_streaming(command, &self.cancel, sink)?;
+        let input = stdin_input(&request.credentials, request.steam_guard_code.as_deref())?;
+        let output = run_streaming_with_input(command, &self.cancel, sink, input)?;
         if output.code != 0 {
-            return Err(DownloadError::Failed(format!(
-                "DepotDownloader exited with code {}",
-                output.code
-            )));
+            return Err(classify_failure(output));
         }
 
         Ok(WorkshopReport {
@@ -243,9 +242,59 @@ pub fn build_args(request: &DownloadRequest) -> Vec<String> {
     if !request.credentials.is_anonymous() {
         args.push("-username".to_string());
         args.push(request.credentials.username.trim().to_string());
+        if has_steam_guard_code(request.steam_guard_code.as_deref()) {
+            args.push("-no-mobile".to_string());
+        }
     }
 
     args
+}
+
+fn has_steam_guard_code(code: Option<&str>) -> bool {
+    code.map(str::trim).is_some_and(|code| !code.is_empty())
+}
+
+fn classify_failure(output: CommandOutput) -> DownloadError {
+    let text = output.output.to_ascii_lowercase();
+    if text.contains("steam guard")
+        || text.contains("2-factor auth code")
+        || text.contains("2 factor auth code")
+    {
+        DownloadError::SteamGuardRequired
+    } else {
+        DownloadError::Failed(format!("DepotDownloader exited with code {}", output.code))
+    }
+}
+
+/// DepotDownloader prompts for the password and then for the Steam Guard code
+/// on stdin. Writing both lines up front keeps the password out of the process
+/// arguments while still answering the prompts in order.
+fn stdin_input(
+    credentials: &super::Credentials,
+    steam_guard_code: Option<&str>,
+) -> Result<Option<String>, DownloadError> {
+    if credentials.is_anonymous() {
+        return Ok(None);
+    }
+    let Some(password) = credentials
+        .password
+        .as_deref()
+        .filter(|password| !password.is_empty())
+    else {
+        return Err(DownloadError::Failed(
+            "DepotDownloader needs the account password; run `steam-press login` again and enter it"
+                .to_string(),
+        ));
+    };
+    let mut input = format!("{password}\n");
+    if let Some(code) = steam_guard_code
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+    {
+        input.push_str(code);
+        input.push('\n');
+    }
+    Ok(Some(input))
 }
 
 #[cfg(test)]
@@ -306,9 +355,102 @@ mod tests {
         request.install_dir = Some("Spacewar".to_string());
         let mut downloader = DepotDownloader::new(Some(script));
         match downloader.download(&request, &EventSink::noop()) {
-            Err(DownloadError::Failed(message)) => assert!(message.contains("code 3")),
+            Err(DownloadError::Failed(message)) => assert!(message.contains("code 3"), "{message}"),
             other => panic!("expected a sidecar failure, got {other:?}"),
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sends_the_password_and_guard_code_on_stdin() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = crate::test_support::temp_dir("depotdownloader-guard");
+        let script = dir.join("fake-DepotDownloader.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nset -eu\ndir=\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    -dir) dir=\"$2\"; shift 2 ;;\n    *) shift ;;\n  esac\ndone\nIFS= read -r password\nIFS= read -r code\n[ \"$password\" = 'secret' ]\n[ \"$code\" = 'ABCDE' ]\nmkdir -p \"$dir/game\"\nprintf 'downloaded' > \"$dir/game/file.bin\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let work_dir = dir.join("work");
+        let mut request = DownloadRequest::for_job(
+            GameJob::new(Platform::Linux64, "2379780"),
+            Credentials {
+                username: "alice".into(),
+                password: Some("secret".into()),
+            },
+            &work_dir,
+        );
+        request.install_dir = Some("Spacewar".to_string());
+        request.steam_guard_code = Some("ABCDE".to_string());
+        let mut downloader = DepotDownloader::new(Some(script));
+        let report = downloader
+            .download(&request, &EventSink::noop())
+            .expect("the password and guard code should reach stdin");
+        assert!(report
+            .content_dir
+            .join("common/Spacewar/game/file.bin")
+            .is_file());
+    }
+
+    #[test]
+    fn stdin_input_orders_the_password_before_the_code() {
+        let credentials = Credentials {
+            username: "alice".into(),
+            password: Some("secret".into()),
+        };
+        assert_eq!(
+            stdin_input(&credentials, Some(" ABCDE ")).unwrap(),
+            Some("secret\nABCDE\n".to_string())
+        );
+        assert_eq!(
+            stdin_input(&credentials, None).unwrap(),
+            Some("secret\n".to_string())
+        );
+        assert_eq!(
+            stdin_input(
+                &Credentials {
+                    username: "alice".into(),
+                    password: Some(" secret ".into()),
+                },
+                None
+            )
+            .unwrap(),
+            Some(" secret \n".to_string())
+        );
+        assert_eq!(
+            stdin_input(&Credentials::anonymous(), Some("ABCDE")).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn build_args_adds_no_mobile_only_with_a_code() {
+        let mut request = DownloadRequest::for_job(
+            GameJob::new(Platform::Linux64, "2379780"),
+            Credentials {
+                username: "alice".into(),
+                password: Some("secret".into()),
+            },
+            Path::new("/tmp/dl"),
+        );
+        assert!(!build_args(&request).contains(&"-no-mobile".to_string()));
+        request.steam_guard_code = Some("ABCDE".into());
+        assert!(build_args(&request).contains(&"-no-mobile".to_string()));
+        assert!(!build_args(&request).join(" ").contains("ABCDE"));
+    }
+
+    #[test]
+    fn classifies_steam_guard_prompts_as_guard_required() {
+        use crate::downloader::process::CommandOutput;
+
+        let output = CommandOutput {
+            code: 1,
+            output: "STEAM GUARD! Please enter your 2-factor auth code".to_string(),
+        };
+        assert_eq!(classify_failure(output), DownloadError::SteamGuardRequired);
     }
 
     #[test]
