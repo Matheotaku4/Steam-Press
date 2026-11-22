@@ -25,6 +25,9 @@ All notable changes are documented here. The format follows
   offline guarantee they provide.
 - `docs/usage.md` documents the Steam Guard flow and the `--steam-guard-code`
   option.
+- The DepotDownloader minimum version is now 3.3.0, the first release with
+  `-no-mobile` for entering a Steam Guard code instead of approving on the
+  mobile app.
 
 ### Fixed
 

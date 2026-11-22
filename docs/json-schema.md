@@ -9,8 +9,16 @@ Toutes les commandes qui acceptent `--json` produisent un objet JSON avec :
 }
 ```
 
-`ok` vaut `false` et `error` contient un message quand la commande échoue.
-Le code de sortie reste la source de vérité (voir `exit-codes.md`).
+`ok` vaut `false` quand la commande échoue. Le code de sortie reste la
+source de vérité (voir `exit-codes.md`).
+
+Deux formes d'échec coexistent :
+
+- une erreur de dispatch (argument invalide, configuration illisible, outil
+  manquant) produit un objet de premier niveau avec `ok: false` et `error` ;
+- un échec d'un travail de lot (`pack`, `workshop run`) produit `ok: false`
+  et le détail dans l'entrée du travail (`jobs[].error`). Il n'y a pas de champ
+  `error` de premier niveau dans ce cas.
 
 ## Commandes
 
@@ -53,7 +61,7 @@ compatibles et ne changent pas la version.
 `queue list`, `workshop list`, `depots list`, `login`, `template render` et
 `diff` à des valeurs de référence. Il vérifie aussi qu'une sortie `--json` ne
 contient rien d'autre que l'objet JSON (notamment pour une file vide) et qu'une
-erreur produit `ok: false`, `error` et `schemaVersion`.
+erreur de dispatch produit `ok: false`, `error` et `schemaVersion`.
 
 Les documents qui dépendent de Steam passent par des constructeurs purs testés
 dans `commands.rs` : `doctor`, `search`, `info`, `pack` et `import` ont chacun

@@ -91,7 +91,9 @@ pub struct PackOptions {
     pub dry_run: bool,
     pub fresh: bool,
     pub credentials: Credentials,
-    /// One-shot Steam Guard code. It is never written to disk.
+    /// One-shot Steam Guard code. It is never persisted in the settings;
+    /// SteamCMD writes it to a short-lived private script and DepotDownloader
+    /// receives it on stdin.
     pub steam_guard_code: Option<String>,
     pub depot_names: DepotNames,
 }

@@ -572,10 +572,19 @@ impl SteamPressApp {
     }
 
     fn start_games(&mut self, context: &egui::Context) {
+        let jobs = self.game_queue.jobs();
+        self.start_game_jobs(jobs, context, true);
+    }
+
+    fn start_game_jobs(
+        &mut self,
+        jobs: Vec<GameJob>,
+        context: &egui::Context,
+        reset_statuses: bool,
+    ) {
         if self.running {
             return;
         }
-        let jobs: Vec<GameJob> = self.game_queue.jobs();
         let job_count = jobs.len();
         if jobs.is_empty() {
             self.error = Some("The game queue is empty.".to_string());
@@ -619,15 +628,24 @@ impl SteamPressApp {
             let _ = sender.send(WorkerEvent::Done);
         });
 
-        self.begin_run(receiver, hook, job_count);
+        self.begin_run(receiver, hook, job_count, reset_statuses);
         context.request_repaint();
     }
 
     fn start_workshop(&mut self, context: &egui::Context) {
+        let jobs = self.workshop_queue.jobs();
+        self.start_workshop_jobs(jobs, context, true);
+    }
+
+    fn start_workshop_jobs(
+        &mut self,
+        jobs: Vec<WorkshopJob>,
+        context: &egui::Context,
+        reset_statuses: bool,
+    ) {
         if self.running {
             return;
         }
-        let jobs: Vec<WorkshopJob> = self.workshop_queue.jobs();
         let job_count = jobs.len();
         if jobs.is_empty() {
             self.error = Some("The workshop queue is empty.".to_string());
@@ -671,21 +689,30 @@ impl SteamPressApp {
             let _ = sender.send(WorkerEvent::Done);
         });
 
-        self.begin_run(receiver, hook, job_count);
+        self.begin_run(receiver, hook, job_count, reset_statuses);
         context.request_repaint();
     }
 
-    fn begin_run(&mut self, receiver: Receiver<WorkerEvent>, hook: SharedHook, count: usize) {
+    fn begin_run(
+        &mut self,
+        receiver: Receiver<WorkerEvent>,
+        hook: SharedHook,
+        count: usize,
+        reset_statuses: bool,
+    ) {
         self.error = None;
         self.status_message = None;
+        self.guard_retry = None;
         self.progress = 0.0;
         self.stage = "Starting".to_string();
         self.log.clear();
         self.activity_open = true;
         self.running = true;
         self.cancel_requested.store(false, Ordering::SeqCst);
-        self.game_queue.reset_statuses();
-        self.workshop_queue.reset_statuses();
+        if reset_statuses {
+            self.game_queue.reset_statuses();
+            self.workshop_queue.reset_statuses();
+        }
         self.receiver = Some(receiver);
         self.cancel_hook = Some(hook);
         self.push_log(
@@ -813,18 +840,36 @@ impl SteamPressApp {
                     && outcome
                         .to_ascii_lowercase()
                         .contains("steam guard code required");
-                let guard_retry = guard_failure.then(|| GuardRetry {
-                    game: game.clone(),
-                    workshop: workshop.clone(),
-                });
-                self.record_history(game, workshop, status_key, &outcome, output.clone());
+                self.record_history(
+                    game.clone(),
+                    workshop.clone(),
+                    status_key,
+                    &outcome,
+                    output.clone(),
+                );
                 let text = match (status, output) {
                     (FinishStatus::Failed, _) => format!("Failed: {outcome}"),
                     (_, Some(path)) => format!("{} - {}", status.label(), path.display()),
-                    (_, None) => format!("{} - {outcome}", status.label()),
+                    (_, None) => format!("{} - {}", status.label(), outcome),
                 };
                 self.push_log(level, text);
-                self.guard_retry = guard_retry;
+                if guard_failure && (game.is_some() || workshop.is_some()) {
+                    self.guard_retry = Some(GuardRetry {
+                        game: game.clone(),
+                        workshop: workshop.clone(),
+                    });
+                } else if self.guard_retry.as_ref().is_some_and(|retry| {
+                    retry
+                        .game
+                        .as_ref()
+                        .is_some_and(|entry| entry.encode() == job)
+                        || retry
+                            .workshop
+                            .as_ref()
+                            .is_some_and(|entry| workshop_stem(entry) == job)
+                }) {
+                    self.guard_retry = None;
+                }
                 if status == FinishStatus::Failed {
                     self.error = Some(outcome);
                 }
@@ -1268,11 +1313,9 @@ impl SteamPressApp {
             if let Some(retry) = self.guard_retry.take() {
                 self.error = None;
                 if let Some(job) = retry.game {
-                    self.game_queue.push(job);
-                    self.start_games(ui.ctx());
+                    self.start_game_jobs(vec![job], ui.ctx(), false);
                 } else if let Some(job) = retry.workshop {
-                    self.workshop_queue.push(job);
-                    self.start_workshop(ui.ctx());
+                    self.start_workshop_jobs(vec![job], ui.ctx(), false);
                 }
             }
         }
@@ -2959,6 +3002,39 @@ mod tests {
         assert_eq!(retry.game.as_ref().map(GameJob::encode), Some(job.encode()));
         assert!(retry.workshop.is_none());
         assert!(app.login.steam_guard_code.is_empty());
+    }
+
+    #[test]
+    fn an_unrelated_job_keeps_the_guard_retry() {
+        let mut app = test_app("guard-preserve");
+        let guard = GameJob::new(Platform::Linux64, "21");
+        let other = GameJob::new(Platform::Linux64, "22");
+        app.game_queue.push(guard.clone());
+        app.game_queue.push(other.clone());
+
+        app.handle_event(PackEvent::Finished {
+            job: guard.encode(),
+            status: FinishStatus::Failed,
+            outcome: "Steam Guard code required; enter a fresh code and retry".to_string(),
+            output: None,
+        });
+        assert!(app.guard_retry.is_some());
+
+        app.handle_event(PackEvent::Finished {
+            job: other.encode(),
+            status: FinishStatus::Completed,
+            outcome: "Completed".to_string(),
+            output: None,
+        });
+        assert!(app.guard_retry.is_some());
+
+        app.handle_event(PackEvent::Finished {
+            job: guard.encode(),
+            status: FinishStatus::Completed,
+            outcome: "Completed".to_string(),
+            output: None,
+        });
+        assert!(app.guard_retry.is_none());
     }
 
     #[test]

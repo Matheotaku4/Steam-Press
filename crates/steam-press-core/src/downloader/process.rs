@@ -61,9 +61,14 @@ pub(crate) fn run_streaming_with_input(
 
     if let Some(input) = input {
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(input.as_bytes()).map_err(|error| {
-                DownloadError::Failed(format!("could not send input to the process: {error}"))
-            })?;
+            if let Err(error) = stdin.write_all(input.as_bytes()) {
+                drop(stdin);
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(DownloadError::Failed(format!(
+                    "could not send input to the process: {error}"
+                )));
+            }
         }
     }
 

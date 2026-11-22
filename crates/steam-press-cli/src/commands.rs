@@ -121,7 +121,7 @@ fn doctor_json(data: DoctorData<'_>) -> serde_json::Value {
         "toolVersions": {
             "sevenzip": tool_version_json(data.sevenzip_version, "21.0"),
             "rar": tool_version_json(data.rar_version, "6.0"),
-            "depotdownloader": tool_version_json(data.depotdownloader_version, "3.0.0"),
+            "depotdownloader": tool_version_json(data.depotdownloader_version, "3.3.0"),
             "steamcmd": serde_json::json!({
                 "found": null,
                 "minimum": null,
@@ -324,7 +324,7 @@ fn doctor(cli: &Cli) -> Result<ExitCode, String> {
     if let Some(version) = &depotdownloader_version {
         println!(
             "  DepotDownloader version: {version} {}",
-            version_hint(version, "3.0.0")
+            version_hint(version, "3.3.0")
         );
     }
     println!("Known depots: {}", names.len());
@@ -992,6 +992,10 @@ fn workshop(cli: &Cli, action: &WorkshopAction) -> Result<ExitCode, String> {
                         PackStatus::Failed(_) => "failed",
                         PackStatus::Cancelled => "cancelled",
                     },
+                    "error": match &outcome.status {
+                        PackStatus::Failed(message) => Some(message.clone()),
+                        _ => None,
+                    },
                     "output": outcome.output.as_ref().map(|path| path.display().to_string()),
                     "durationMs": outcome.duration.as_millis(),
                 }));
@@ -1199,7 +1203,7 @@ mod tests {
                 "toolVersions": {
                     "sevenzip": {"found": "16.02", "minimum": "21.0", "ok": false},
                     "rar": {"found": null, "minimum": "6.0", "ok": null},
-                    "depotdownloader": {"found": null, "minimum": "3.0.0", "ok": null},
+                    "depotdownloader": {"found": null, "minimum": "3.3.0", "ok": null},
                     "steamcmd": {"found": null, "minimum": null, "ok": null}
                 },
                 "diskFreeBytes": 123456789,

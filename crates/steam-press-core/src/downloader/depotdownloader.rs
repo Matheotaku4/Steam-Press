@@ -279,7 +279,6 @@ fn stdin_input(
     let Some(password) = credentials
         .password
         .as_deref()
-        .map(str::trim)
         .filter(|password| !password.is_empty())
     else {
         return Err(DownloadError::Failed(
@@ -409,6 +408,17 @@ mod tests {
         assert_eq!(
             stdin_input(&credentials, None).unwrap(),
             Some("secret\n".to_string())
+        );
+        assert_eq!(
+            stdin_input(
+                &Credentials {
+                    username: "alice".into(),
+                    password: Some(" secret ".into()),
+                },
+                None
+            )
+            .unwrap(),
+            Some(" secret \n".to_string())
         );
         assert_eq!(
             stdin_input(&Credentials::anonymous(), Some("ABCDE")).unwrap(),

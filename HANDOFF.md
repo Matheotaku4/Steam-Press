@@ -174,6 +174,17 @@ git push origin v1.0.3
 
 Ne pas créer le tag avant le merge : cela publierait depuis la branche, pas depuis `main`.
 
+Si `gh release create` échoue après avoir créé le tag, une relance voit la release
+existante et `prepare` passe `publish=false`. Récupérer avec :
+
+```bash
+gh release delete v1.0.3 --cleanup-tag --yes
+gh workflow run release.yml --ref main
+```
+
+ou téléverser les archives manquantes sur la release existante avec
+`gh release upload v1.0.3 dist/*.tar.gz dist/*.sha256 dist/SHA256SUMS --clobber`.
+
 ### 4. Vérifier la release
 
 ```bash
@@ -194,8 +205,9 @@ Vérification téléchargeable :
 
 ```bash
 mkdir -p /tmp/sp-1.0.3 && cd /tmp/sp-1.0.3
-gh release download v1.0.3 --repo Matheotaku4/Steam-Press --pattern '*linux-x86_64*'
+gh release download v1.0.3 --repo Matheotaku4/Steam-Press
 sha256sum -c ./*.sha256
+sha256sum -c SHA256SUMS
 tar -xzf steam-press-cli-1.0.3-linux-x86_64.tar.gz
 ./steam-press-cli-1.0.3-linux-x86_64/steam-press --version   # 1.0.3
 tar -tzf steam-press-cli-1.0.3-linux-x86_64.tar.gz | grep 'docs/screenshots/'
