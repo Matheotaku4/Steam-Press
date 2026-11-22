@@ -14,11 +14,16 @@ source de vérité (voir `exit-codes.md`).
 
 Deux formes d'échec coexistent :
 
-- une erreur de dispatch (argument invalide, configuration illisible, outil
-  manquant) produit un objet de premier niveau avec `ok: false` et `error` ;
+- une erreur de dispatch (configuration illisible, outil manquant, valeur
+  refusée par une commande) produit un objet de premier niveau avec `ok: false`
+  et `error` ;
 - un échec d'un travail de lot (`pack`, `workshop run`) produit `ok: false`
   et le détail dans l'entrée du travail (`jobs[].error`). Il n'y a pas de champ
   `error` de premier niveau dans ce cas.
+
+Les erreurs de syntaxe détectées par `Cli::parse()` (par exemple une option
+inconnue) sont écrites sur stderr et sortent avec le code 2 : elles ne
+produisent pas d'objet JSON, même avec `--json`.
 
 ## Commandes
 

@@ -605,6 +605,7 @@ impl SteamPressApp {
         });
         let hook: SharedHook = Arc::new(Mutex::new(None));
         let thread_hook = hook.clone();
+        self.cancel_requested.store(false, Ordering::SeqCst);
         let cancel_requested = self.cancel_requested.clone();
 
         std::thread::spawn(move || {
@@ -666,6 +667,7 @@ impl SteamPressApp {
         });
         let hook: SharedHook = Arc::new(Mutex::new(None));
         let thread_hook = hook.clone();
+        self.cancel_requested.store(false, Ordering::SeqCst);
         let cancel_requested = self.cancel_requested.clone();
 
         std::thread::spawn(move || {
@@ -708,7 +710,6 @@ impl SteamPressApp {
         self.log.clear();
         self.activity_open = true;
         self.running = true;
-        self.cancel_requested.store(false, Ordering::SeqCst);
         if reset_statuses {
             self.game_queue.reset_statuses();
             self.workshop_queue.reset_statuses();

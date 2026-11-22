@@ -157,6 +157,22 @@ fn diff_snapshot() {
 }
 
 #[test]
+fn dispatch_errors_are_json_and_versioned() {
+    let config = temp_dir("dispatch-error");
+    let output = Command::new(env!("CARGO_BIN_EXE_steam-press"))
+        .arg("--config-dir")
+        .arg(&config)
+        .args(["queue", "add", "not-a-number", "--json"])
+        .output()
+        .expect("run steam-press");
+    assert_eq!(output.status.code(), Some(1));
+    let document: Value = serde_json::from_slice(&output.stdout).expect("JSON error document");
+    assert_eq!(document["schemaVersion"], 1);
+    assert_eq!(document["ok"], false);
+    assert!(document["error"].as_str().is_some());
+}
+
+#[test]
 fn error_output_is_json_and_versioned() {
     let config = temp_dir("error");
     let output = Command::new(env!("CARGO_BIN_EXE_steam-press"))

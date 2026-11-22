@@ -182,8 +182,17 @@ gh release delete v1.0.3 --cleanup-tag --yes
 gh workflow run release.yml --ref main
 ```
 
-ou téléverser les archives manquantes sur la release existante avec
-`gh release upload v1.0.3 dist/*.tar.gz dist/*.sha256 dist/SHA256SUMS --clobber`.
+ou téléverser les archives manquantes sur la release existante. Les archives
+d'un run CI sont dans ses artifacts, pas dans `dist/` : les récupérer et
+reconstruire `SHA256SUMS` avant l'envoi.
+
+```bash
+gh run download <run-id> --pattern 'dist-*' --dir artifacts
+mkdir -p dist
+find artifacts -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) -exec cp {} dist/ \;
+cd dist && sha256sum ./*.tar.gz > SHA256SUMS
+gh release upload v1.0.3 ./*.tar.gz ./*.tar.gz.sha256 SHA256SUMS --clobber
+```
 
 ### 4. Vérifier la release
 
