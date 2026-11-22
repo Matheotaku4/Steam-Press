@@ -192,7 +192,7 @@ mkdir -p "$work/artifacts" "$work/dist"
 gh run download <run-id> --pattern 'dist-*' --dir "$work/artifacts"
 find "$work/artifacts" -type f \( -name '*.tar.gz' -o -name '*.tar.gz.sha256' \) -exec cp {} "$work/dist/" \;
 cd "$work/dist" && sha256sum ./*.tar.gz > SHA256SUMS
-gh release upload v1.0.3 ./*.tar.gz ./*.tar.gz.sha256 SHA256SUMS --clobber
+gh release upload v1.0.3 ./*.tar.gz ./*.tar.gz.sha256 SHA256SUMS --clobber --repo Matheotaku4/Steam-Press
 ```
 
 ### 4. Vérifier la release
