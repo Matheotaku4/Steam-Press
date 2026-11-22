@@ -4,7 +4,11 @@ all-features = true
 [advisories]
 version = 2
 unmaintained = "workspace"
-ignore = []
+ignore = [
+  # chrono 0.4.45 is the latest release; RUSTSEC-2026-0543 has no fixed
+  # version. Migration to `time` is tracked separately from the 1.0.3 release.
+  { id = "RUSTSEC-2026-0543", reason = "no fixed chrono release exists yet" },
+]
 
 [licenses]
 version = 2
