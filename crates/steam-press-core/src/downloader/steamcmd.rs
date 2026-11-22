@@ -11,6 +11,7 @@ use crate::tooling;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::SystemTime;
 
 pub struct SteamCmd {
     binary: Option<PathBuf>,
@@ -96,6 +97,7 @@ impl Downloader for SteamCmd {
         let binary = self.locate()?;
         fs::create_dir_all(&request.work_dir)
             .map_err(|error| DownloadError::Failed(format!("work directory: {error}")))?;
+        reset_download_state(&request.work_dir);
 
         let script_path = request
             .work_dir
@@ -117,12 +119,27 @@ impl Downloader for SteamCmd {
             .arg(&script_path)
             .current_dir(&request.work_dir);
 
+        let snapshot = LogSnapshot::capture(&binary, &request.work_dir);
         let result = run_streaming(command, &self.cancel, sink);
         let _ = fs::remove_file(&script_path);
         let output = result?;
 
         let steamapps = request.work_dir.join("steamapps");
-        classify_run(output.code, &output.output, "", steamapps.is_dir(), true)?;
+        let log_dir = log_directory(&output.output, &request.work_dir);
+        let (content_log, connection_log) = read_logs(&log_dir, &snapshot);
+        let content_log = format!("{}\n{content_log}", output.output);
+        let has_login_logs =
+            request.credentials.is_anonymous() || login_logs_present(&log_dir, &snapshot);
+        if let Err(error) = classify_run(
+            output.code,
+            &content_log,
+            &connection_log,
+            steamapps.is_dir(),
+            has_login_logs,
+        ) {
+            cleanup_failed_download(&request.work_dir);
+            return Err(error);
+        }
 
         let manifest = steamapps.join(format!("appmanifest_{}.acf", request.appid));
         Ok(DownloadReport {
@@ -145,6 +162,7 @@ impl Downloader for SteamCmd {
         let binary = self.locate()?;
         fs::create_dir_all(&request.work_dir)
             .map_err(|error| DownloadError::Failed(format!("work directory: {error}")))?;
+        reset_download_state(&request.work_dir);
 
         let script_path = request
             .work_dir
@@ -165,6 +183,7 @@ impl Downloader for SteamCmd {
             .arg(&script_path)
             .current_dir(&request.work_dir);
 
+        let snapshot = LogSnapshot::capture(&binary, &request.work_dir);
         let result = run_streaming(command, &self.cancel, sink);
         let _ = fs::remove_file(&script_path);
         let output = result?;
@@ -173,7 +192,21 @@ impl Downloader for SteamCmd {
             .join("steamapps/workshop/content")
             .join(&request.appid)
             .join(&request.workshop_id);
-        classify_run(output.code, &output.output, "", content.is_dir(), true)?;
+        let log_dir = log_directory(&output.output, &request.work_dir);
+        let (content_log, connection_log) = read_logs(&log_dir, &snapshot);
+        let content_log = format!("{}\n{content_log}", output.output);
+        let has_login_logs =
+            request.credentials.is_anonymous() || login_logs_present(&log_dir, &snapshot);
+        if let Err(error) = classify_run(
+            output.code,
+            &content_log,
+            &connection_log,
+            content.is_dir(),
+            has_login_logs,
+        ) {
+            cleanup_failed_download(&request.work_dir);
+            return Err(error);
+        }
 
         Ok(WorkshopReport {
             content_dir: if content.is_dir() {
@@ -238,13 +271,15 @@ pub fn build_workshop_script(request: &WorkshopRequest) -> String {
 /// SteamCMD's success marker: a stale `steamapps` directory from a previous
 /// attempt is not enough, because SteamCMD keeps
 /// "Steam Guard must be approved before continuing" in the log of a successful
-/// mobile confirmation.
+/// mobile confirmation. `has_login_logs` mirrors SuperSteamPacker: SteamCMD
+/// writes `sitelicense_steamcmd.txt` or `compat_log.txt` only after a
+/// successful login.
 pub fn classify_run(
     exit_code: i32,
     content_log: &str,
     connection_log: &str,
     has_content: bool,
-    has_compat_log: bool,
+    has_login_logs: bool,
 ) -> Result<(), DownloadError> {
     let combined = format!("{content_log}\n{connection_log}");
 
@@ -273,7 +308,7 @@ pub fn classify_run(
         ));
     }
     if exit_code != 0 {
-        if !has_content && !has_compat_log {
+        if !has_content && !has_login_logs {
             return Err(DownloadError::SteamGuardRequired);
         }
         return Err(DownloadError::Failed(format!(
@@ -288,6 +323,151 @@ pub fn log_paths(root: &Path) -> (PathBuf, PathBuf) {
         root.join("logs/content_log.txt"),
         root.join("logs/connection_log.txt"),
     )
+}
+
+fn reset_download_state(root: &Path) {
+    for name in ["steamapps", "depotcache", "logs"] {
+        let path = root.join(name);
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
+}
+
+/// SteamCMD writes its logs to the directory it prints at startup. On Linux
+/// that is `$HOME/Steam/logs`, not the working directory, so parsing the line
+/// is more reliable than assuming `work_dir/logs`.
+fn log_directory(output: &str, work_dir: &Path) -> PathBuf {
+    const PREFIX: &str = "Logging directory:";
+    for line in output.lines() {
+        let Some(index) = line.find(PREFIX) else {
+            continue;
+        };
+        let path = line[index + PREFIX.len()..]
+            .trim()
+            .trim_matches(|character| character == '\'' || character == '"');
+        if !path.is_empty() {
+            return PathBuf::from(path);
+        }
+    }
+    work_dir.join("logs")
+}
+
+const LOG_FILES: [&str; 4] = [
+    "content_log.txt",
+    "connection_log.txt",
+    "sitelicense_steamcmd.txt",
+    "compat_log.txt",
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileState {
+    len: u64,
+    modified: Option<SystemTime>,
+}
+
+fn file_state(path: &Path) -> Option<FileState> {
+    let metadata = fs::metadata(path).ok()?;
+    Some(FileState {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+/// State of every log SteamCMD could write, captured before the run. A file
+/// that did not exist before, or whose size or mtime changed, was written by
+/// this run. Timestamp tolerance alone cannot prove that.
+struct LogSnapshot {
+    started: SystemTime,
+    files: Vec<(PathBuf, Option<FileState>)>,
+}
+
+impl LogSnapshot {
+    fn capture(binary: &Path, work_dir: &Path) -> Self {
+        let started = SystemTime::now();
+        let mut files = Vec::new();
+        for dir in log_candidates(binary, work_dir) {
+            for name in LOG_FILES {
+                let path = dir.join(name);
+                let state = file_state(&path);
+                files.push((path, state));
+            }
+        }
+        Self { started, files }
+    }
+
+    fn written_since(&self, path: &Path) -> bool {
+        let before = self
+            .files
+            .iter()
+            .find(|(candidate, _)| candidate == path)
+            .map(|(_, state)| *state);
+        let after = file_state(path);
+        match (before, after) {
+            (Some(Some(before)), Some(after)) => before != after,
+            (Some(None), Some(_)) => true,
+            // A custom `Logging directory` is only known after the run. Fall
+            // back to its mtime, without tolerance, so a pre-run log is never
+            // accepted as this run's output.
+            (None, Some(after)) => after
+                .modified
+                .map(|modified| modified >= self.started)
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+}
+
+fn log_candidates(binary: &Path, work_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![work_dir.join("logs")];
+    if let Some(parent) = binary.parent() {
+        dirs.push(parent.join("logs"));
+    }
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        let home = PathBuf::from(home);
+        dirs.push(home.join("Steam").join("logs"));
+        dirs.push(home.join(".steam").join("steam").join("logs"));
+        dirs.push(home.join("Library/Application Support/Steam/logs"));
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+fn read_written(path: &Path, snapshot: &LogSnapshot) -> String {
+    if snapshot.written_since(path) {
+        fs::read_to_string(path).unwrap_or_default()
+    } else {
+        String::new()
+    }
+}
+
+fn read_logs(dir: &Path, snapshot: &LogSnapshot) -> (String, String) {
+    (
+        read_written(&dir.join("content_log.txt"), snapshot),
+        read_written(&dir.join("connection_log.txt"), snapshot),
+    )
+}
+
+/// SteamCMD creates these logs only after a successful login. Their absence
+/// is the same guard signal SuperSteamPacker uses when the process exits
+/// without an explicit "Steam Guard" line. The snapshot keeps a log from an
+/// earlier attempt from counting as this run's login.
+fn login_logs_present(dir: &Path, snapshot: &LogSnapshot) -> bool {
+    ["sitelicense_steamcmd.txt", "compat_log.txt"]
+        .iter()
+        .any(|name| snapshot.written_since(&dir.join(name)))
+}
+
+/// A failed attempt must not leave content behind: a later run could treat
+/// stale `steamapps` or `depotcache` as the result of the new attempt.
+fn cleanup_failed_download(root: &Path) {
+    for name in ["steamapps", "depotcache"] {
+        let path = root.join(name);
+        if path.is_dir() {
+            let _ = fs::remove_dir_all(path);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -381,7 +561,7 @@ mod tests {
         let binary = dir.join("fake-steamcmd.sh");
         fs::write(
             &binary,
-            "#!/bin/sh\nscript=\"$4\"\nif grep -q 'login alice pw ABCDE' \"$script\"; then\n  mkdir -p steamapps\n  echo \"Steam Guard must be approved before continuing\"\n  echo \"Success! App '2379780' fully installed.\"\n  exit 0\nfi\necho 'Steam Guard required'\nexit 1\n",
+            "#!/bin/sh\ndir=\"$2\"\nscript=\"$4\"\nif grep -q 'login alice pw ABCDE' \"$script\"; then\n  logdir=\"$dir/global-logs\"\n  mkdir -p \"$dir/steamapps\" \"$logdir\"\n  echo \"Logging directory: '$logdir'\"\n  echo \"Steam Guard must be approved before continuing\"\n  printf \"Success! App '2379780' fully installed.\\n\" > \"$logdir/content_log.txt\"\n  exit 0\nfi\necho 'Steam Guard required'\nexit 1\n",
         )
         .unwrap();
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
@@ -400,6 +580,140 @@ mod tests {
             .download(&request, &EventSink::noop())
             .expect("the guard code should be accepted");
         assert!(report.content_dir.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn reads_steamcmd_logs_for_login_errors() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let cases = [
+            ("No subscription", "", DownloadError::NoSubscription),
+            ("", "Rate Limit Exceeded", DownloadError::RateLimited),
+            ("", "Invalid Password", DownloadError::InvalidCredentials),
+        ];
+        for (index, (content, connection, expected)) in cases.into_iter().enumerate() {
+            let dir = std::env::temp_dir().join(format!(
+                "steam-press-steamcmd-logs-{}-{index}",
+                std::process::id()
+            ));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            let binary = dir.join("fake-steamcmd.sh");
+            fs::write(
+                &binary,
+                format!(
+                    "#!/bin/sh\ndir=\"$2\"\nlogdir=\"$dir/global-logs\"\nmkdir -p \"$logdir\"\necho \"Logging directory: '$logdir'\"\nprintf '%s\\n' '{content}' > \"$logdir/content_log.txt\"\nprintf '%s\\n' '{connection}' > \"$logdir/connection_log.txt\"\nexit 0\n"
+                ),
+            )
+            .unwrap();
+            fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+
+            let request = DownloadRequest::for_job(
+                GameJob::new(Platform::Linux64, "2379780"),
+                Credentials {
+                    username: "alice".into(),
+                    password: Some("pw".into()),
+                },
+                &dir,
+            );
+            let mut downloader = SteamCmd::new(Some(binary));
+            assert_eq!(
+                downloader
+                    .download(&request, &EventSink::noop())
+                    .unwrap_err(),
+                expected
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn failed_download_removes_partial_content() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "steam-press-steamcmd-cleanup-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let binary = dir.join("fake-steamcmd.sh");
+        fs::write(
+            &binary,
+            "#!/bin/sh\ndir=\"$2\"\nmkdir -p \"$dir/steamapps/partial\" \"$dir/logs\"\nprintf 'Steam Guard required\\n' > \"$dir/logs/content_log.txt\"\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let request = DownloadRequest::for_job(
+            GameJob::new(Platform::Linux64, "2379780"),
+            Credentials {
+                username: "alice".into(),
+                password: Some("pw".into()),
+            },
+            &dir,
+        );
+        let mut downloader = SteamCmd::new(Some(binary));
+        assert_eq!(
+            downloader
+                .download(&request, &EventSink::noop())
+                .unwrap_err(),
+            DownloadError::SteamGuardRequired
+        );
+        assert!(!dir.join("steamapps").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignores_stale_logs_from_a_previous_attempt() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir =
+            std::env::temp_dir().join(format!("steam-press-steamcmd-stale-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("global-logs")).unwrap();
+        fs::write(
+            dir.join("global-logs/content_log.txt"),
+            "Invalid Password\n",
+        )
+        .unwrap();
+        let binary = dir.join("fake-steamcmd.sh");
+        fs::write(
+            &binary,
+            "#!/bin/sh\ndir=\"$2\"\nlogdir=\"$dir/global-logs\"\necho \"Logging directory: '$logdir'\"\nmkdir -p \"$dir/steamapps\"\necho \"Success! App '2379780' fully installed.\"\nexit 0\n",
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let request = DownloadRequest::for_job(
+            GameJob::new(Platform::Linux64, "2379780"),
+            Credentials {
+                username: "alice".into(),
+                password: Some("pw".into()),
+            },
+            &dir,
+        );
+        let mut downloader = SteamCmd::new(Some(binary));
+        assert!(
+            downloader.download(&request, &EventSink::noop()).is_ok(),
+            "a stale log must not fail a successful run"
+        );
+    }
+
+    #[test]
+    fn finds_the_steamcmd_log_directory() {
+        assert_eq!(
+            log_directory(
+                "Logging directory: '/home/alice/Steam/logs'\n",
+                Path::new("/work")
+            ),
+            PathBuf::from("/home/alice/Steam/logs")
+        );
+        assert_eq!(
+            log_directory("no log line", Path::new("/work")),
+            PathBuf::from("/work/logs")
+        );
     }
 
     #[test]
