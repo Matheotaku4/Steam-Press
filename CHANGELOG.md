@@ -4,6 +4,23 @@ All notable changes are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- SteamCMD downloads now read `logs/content_log.txt` and
+  `logs/connection_log.txt` instead of relying only on stdout. The success
+  marker and login errors (`No subscription`, `Rate Limit Exceeded`,
+  `Invalid Password`) can be written to those logs, so a completed download was
+  still classified as a Steam Guard failure.
+- Each SteamCMD attempt now starts from a clean `steamapps`, `depotcache` and
+  `logs` state, and a failed attempt removes partial content. This mirrors
+  SuperSteamPacker and prevents a stale directory from being mistaken for the
+  result of the current attempt.
+- The guard check now also uses SuperSteamPacker's login-log signal:
+  `sitelicense_steamcmd.txt` or `compat_log.txt` must exist when a real login
+  exits without producing content.
+
 ## [1.0.4] - 2026-11-22
 
 ### Fixed
