@@ -11,7 +11,7 @@ use crate::tooling;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 pub struct SteamCmd {
     binary: Option<PathBuf>,
@@ -119,17 +119,17 @@ impl Downloader for SteamCmd {
             .arg(&script_path)
             .current_dir(&request.work_dir);
 
-        let started = SystemTime::now();
+        let snapshot = LogSnapshot::capture(&binary, &request.work_dir);
         let result = run_streaming(command, &self.cancel, sink);
         let _ = fs::remove_file(&script_path);
         let output = result?;
 
         let steamapps = request.work_dir.join("steamapps");
         let log_dir = log_directory(&output.output, &request.work_dir);
-        let (content_log, connection_log) = read_logs(&log_dir, started);
+        let (content_log, connection_log) = read_logs(&log_dir, &snapshot);
         let content_log = format!("{}\n{content_log}", output.output);
         let has_login_logs =
-            request.credentials.is_anonymous() || login_logs_present(&log_dir, started);
+            request.credentials.is_anonymous() || login_logs_present(&log_dir, &snapshot);
         if let Err(error) = classify_run(
             output.code,
             &content_log,
@@ -183,7 +183,7 @@ impl Downloader for SteamCmd {
             .arg(&script_path)
             .current_dir(&request.work_dir);
 
-        let started = SystemTime::now();
+        let snapshot = LogSnapshot::capture(&binary, &request.work_dir);
         let result = run_streaming(command, &self.cancel, sink);
         let _ = fs::remove_file(&script_path);
         let output = result?;
@@ -193,10 +193,10 @@ impl Downloader for SteamCmd {
             .join(&request.appid)
             .join(&request.workshop_id);
         let log_dir = log_directory(&output.output, &request.work_dir);
-        let (content_log, connection_log) = read_logs(&log_dir, started);
+        let (content_log, connection_log) = read_logs(&log_dir, &snapshot);
         let content_log = format!("{}\n{content_log}", output.output);
         let has_login_logs =
-            request.credentials.is_anonymous() || login_logs_present(&log_dir, started);
+            request.credentials.is_anonymous() || login_logs_present(&log_dir, &snapshot);
         if let Err(error) = classify_run(
             output.code,
             &content_log,
@@ -353,36 +353,110 @@ fn log_directory(output: &str, work_dir: &Path) -> PathBuf {
     work_dir.join("logs")
 }
 
-fn is_fresh(path: &Path, started: SystemTime) -> bool {
-    fs::metadata(path)
-        .and_then(|metadata| metadata.modified())
-        .map(|modified| modified + Duration::from_secs(5) >= started)
-        .unwrap_or(false)
+const LOG_FILES: [&str; 4] = [
+    "content_log.txt",
+    "connection_log.txt",
+    "sitelicense_steamcmd.txt",
+    "compat_log.txt",
+];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileState {
+    len: u64,
+    modified: Option<SystemTime>,
 }
 
-fn read_fresh(path: &Path, started: SystemTime) -> String {
-    if is_fresh(path, started) {
+fn file_state(path: &Path) -> Option<FileState> {
+    let metadata = fs::metadata(path).ok()?;
+    Some(FileState {
+        len: metadata.len(),
+        modified: metadata.modified().ok(),
+    })
+}
+
+/// State of every log SteamCMD could write, captured before the run. A file
+/// that did not exist before, or whose size or mtime changed, was written by
+/// this run. Timestamp tolerance alone cannot prove that.
+struct LogSnapshot {
+    started: SystemTime,
+    files: Vec<(PathBuf, Option<FileState>)>,
+}
+
+impl LogSnapshot {
+    fn capture(binary: &Path, work_dir: &Path) -> Self {
+        let started = SystemTime::now();
+        let mut files = Vec::new();
+        for dir in log_candidates(binary, work_dir) {
+            for name in LOG_FILES {
+                let path = dir.join(name);
+                let state = file_state(&path);
+                files.push((path, state));
+            }
+        }
+        Self { started, files }
+    }
+
+    fn written_since(&self, path: &Path) -> bool {
+        let before = self
+            .files
+            .iter()
+            .find(|(candidate, _)| candidate == path)
+            .map(|(_, state)| *state);
+        let after = file_state(path);
+        match (before, after) {
+            (Some(Some(before)), Some(after)) => before != after,
+            (Some(None), Some(_)) => true,
+            // A custom `Logging directory` is only known after the run. Fall
+            // back to its mtime, without tolerance, so a pre-run log is never
+            // accepted as this run's output.
+            (None, Some(after)) => after
+                .modified
+                .map(|modified| modified >= self.started)
+                .unwrap_or(false),
+            _ => false,
+        }
+    }
+}
+
+fn log_candidates(binary: &Path, work_dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![work_dir.join("logs")];
+    if let Some(parent) = binary.parent() {
+        dirs.push(parent.join("logs"));
+    }
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        let home = PathBuf::from(home);
+        dirs.push(home.join("Steam").join("logs"));
+        dirs.push(home.join(".steam").join("steam").join("logs"));
+        dirs.push(home.join("Library/Application Support/Steam/logs"));
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+fn read_written(path: &Path, snapshot: &LogSnapshot) -> String {
+    if snapshot.written_since(path) {
         fs::read_to_string(path).unwrap_or_default()
     } else {
         String::new()
     }
 }
 
-fn read_logs(dir: &Path, started: SystemTime) -> (String, String) {
+fn read_logs(dir: &Path, snapshot: &LogSnapshot) -> (String, String) {
     (
-        read_fresh(&dir.join("content_log.txt"), started),
-        read_fresh(&dir.join("connection_log.txt"), started),
+        read_written(&dir.join("content_log.txt"), snapshot),
+        read_written(&dir.join("connection_log.txt"), snapshot),
     )
 }
 
 /// SteamCMD creates these logs only after a successful login. Their absence
 /// is the same guard signal SuperSteamPacker uses when the process exits
-/// without an explicit "Steam Guard" line. The freshness check keeps a log
-/// from an earlier attempt from counting as this run's login.
-fn login_logs_present(dir: &Path, started: SystemTime) -> bool {
+/// without an explicit "Steam Guard" line. The snapshot keeps a log from an
+/// earlier attempt from counting as this run's login.
+fn login_logs_present(dir: &Path, snapshot: &LogSnapshot) -> bool {
     ["sitelicense_steamcmd.txt", "compat_log.txt"]
         .iter()
-        .any(|name| is_fresh(&dir.join(name), started))
+        .any(|name| snapshot.written_since(&dir.join(name)))
 }
 
 /// A failed attempt must not leave content behind: a later run could treat
@@ -588,6 +662,43 @@ mod tests {
             DownloadError::SteamGuardRequired
         );
         assert!(!dir.join("steamapps").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ignores_stale_logs_from_a_previous_attempt() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir =
+            std::env::temp_dir().join(format!("steam-press-steamcmd-stale-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("global-logs")).unwrap();
+        fs::write(
+            dir.join("global-logs/content_log.txt"),
+            "Invalid Password\n",
+        )
+        .unwrap();
+        let binary = dir.join("fake-steamcmd.sh");
+        fs::write(
+            &binary,
+            "#!/bin/sh\ndir=\"$2\"\nlogdir=\"$dir/global-logs\"\necho \"Logging directory: '$logdir'\"\nmkdir -p \"$dir/steamapps\"\necho \"Success! App '2379780' fully installed.\"\nexit 0\n",
+        )
+        .unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let request = DownloadRequest::for_job(
+            GameJob::new(Platform::Linux64, "2379780"),
+            Credentials {
+                username: "alice".into(),
+                password: Some("pw".into()),
+            },
+            &dir,
+        );
+        let mut downloader = SteamCmd::new(Some(binary));
+        assert!(
+            downloader.download(&request, &EventSink::noop()).is_ok(),
+            "a stale log must not fail a successful run"
+        );
     }
 
     #[test]
